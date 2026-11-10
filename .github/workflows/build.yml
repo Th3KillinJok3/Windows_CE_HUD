@@ -22,13 +22,18 @@ jobs:
         run: |
           BIN=$(dirname $(find . -maxdepth 4 -name 'arm-mingw32ce-gcc' -type f | head -1))
           echo "CEGCC_BIN=$PWD/$BIN" >> $GITHUB_ENV
+          echo "CEGCC_LIB=$PWD/$BIN/../arm-mingw32ce/lib" >> $GITHUB_ENV
           "$PWD/$BIN/arm-mingw32ce-gcc" --version
+
+      - name: Jakie biblioteki mam
+        run: |
+          ls "$CEGCC_LIB" | grep -i -E 'gdi|core|comm|user' | head -30 || true
 
       - name: Kompilacja hud.exe
         run: |
           export PATH="$CEGCC_BIN:$PATH"
           arm-mingw32ce-gcc -O2 -Wall -o hud.exe hud.c \
-            -lgdi32 -lcoredll -lcommctrl \
+            -lgdi -lcoredll \
             -Wl,-subsystem,windows
           ls -la hud.exe
 
