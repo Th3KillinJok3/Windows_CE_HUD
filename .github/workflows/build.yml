@@ -27,13 +27,16 @@ jobs:
 
       - name: Jakie biblioteki mam
         run: |
-          ls "$CEGCC_LIB" | grep -i -E 'gdi|core|comm|user' | head -30 || true
+          echo "--- katalog lib ---"
+          ls "$CEGCC_LIB" | head -40 || true
+          echo "--- cokolwiek z gdi/coredll w calym drzewie ---"
+          find . -maxdepth 6 -name 'lib*gdi*' -o -maxdepth 6 -name 'lib*coredll*' | head -20 || true
 
       - name: Kompilacja hud.exe
         run: |
           export PATH="$CEGCC_BIN:$PATH"
           arm-mingw32ce-gcc -O2 -Wall -o hud.exe hud.c \
-            -lgdi -lcoredll \
+            -lcoredll \
             -Wl,-subsystem,windows
           ls -la hud.exe
 
