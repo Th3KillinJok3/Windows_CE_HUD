@@ -5,6 +5,9 @@
  * Kompilacja (CeGCC 9.3.0):
  *   arm-mingw32ce-gcc -O2 -Wall -DUNICODE -D_UNICODE -o hud.exe hud.c \
  *       -lcoredll -Wl,-subsystem,windows
+ *
+ * Automatycznie szuka portu GPS (COM1/2/3/6/7/9) i prędkości (4800/9600).
+ * Znaleziony port i baud są pokazywane na górnym pasku.
  */
 
 #include <windows.h>
@@ -14,10 +17,13 @@
 #include <wchar.h>
 
 /* ─────────── CONFIG ─────────── */
-#define GPS_PORT      L"COM6:"
-#define GPS_BAUD      CBR_4800
 #define ODO_FILE_A    "\\Storage Card\\hud_odo.txt"
 #define ODO_FILE_B    "\\SDMMC\\hud_odo.txt"
+
+/* Po znalezieniu portu wpisz go tu, żeby start był natychmiastowy.
+ * Zostaw 0, aby skanować za każdym razem. */
+#define FIXED_PORT    L""          /* np. L"COM2:" */
+#define FIXED_BAUD    0            /* np. CBR_4800 */
 
 /* ─────────── Kolory ─────────── */
 #define C_BG        RGB(10, 15, 13)
@@ -28,8 +34,11 @@
 #define C_ACCENT    RGB(74, 222, 128)
 #define C_ACCENT_D  RGB(28, 58, 42)
 #define C_WARN      RGB(251, 191, 36)
+#define C_WARNBG    RGB(42, 34, 12)
 #define C_ERR       RGB(248, 113, 113)
-#define C_ERRBG     RGB(60, 32, 32)
+#define C_ERRBG     RGB(42, 26, 26)
+#define C_BTN       RGB(60, 32, 32)
+#define C_BTNLINE   RGB(120, 60, 60)
 
 #define PI_D 3.14159265358979323846
 
@@ -40,14 +49,26 @@ static volatile double g_speed_kmh;
 static volatile double g_alt_m;
 static volatile double g_lat, g_lon;
 
-static HANDLE         g_hGps = INVALID_HANDLE_VALUE;
-static volatile int   g_running = 1;
+static HANDLE          g_hGps = INVALID_HANDLE_VALUE;
+static volatile int    g_running = 1;
+
+/* ─────────── Auto-skan ─────────── */
+static const WCHAR *g_ports[] = { L"COM1:", L"COM2:", L"COM3:",
+                                  L"COM6:", L"COM7:", L"COM9:" };
+static const DWORD  g_bauds[] = { CBR_4800, CBR_9600 };
+#define N_PORTS (int)(sizeof(g_ports) / sizeof(g_ports[0]))
+#define N_BAUDS (int)(sizeof(g_bauds) / sizeof(g_bauds[0]))
+
+static volatile int  g_scanning = 1;
+static WCHAR         g_used_port[16] = L"?";
+static volatile DWORD g_used_baud;
+static volatile int  g_probe_result;   /* 0=szuka  1=OK  -1=brak */
 
 /* ─────────── Licznik ─────────── */
-static double    g_odo_km  = 0.0;
-static double    g_last_lat, g_last_lon;
-static int       g_have_last;
-static DWORD     g_last_tick;
+static double g_odo_km = 0.0;
+static double g_last_lat, g_last_lon;
+static int    g_have_last;
+static DWORD  g_last_tick;
 
 /* ─────────── Fonty ─────────── */
 static HFONT g_fSpeed, g_fUnit, g_fLabel, g_fVal, g_fBtn;
@@ -154,49 +175,125 @@ static void nmea_line(char *line)
     else if (!strcmp(type, "GGA")) parse_gga(f, n);
 }
 
+/* ─────────── Otwarcie portu z zadanymi parametrami ─────────── */
+static HANDLE open_port(const WCHAR *port, DWORD baud)
+{
+    HANDLE h;
+    DCB dcb;
+    COMMTIMEOUTS to;
+
+    h = CreateFileW(port, GENERIC_READ,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) return INVALID_HANDLE_VALUE;
+
+    memset(&dcb, 0, sizeof(dcb));
+    dcb.DCBlength = sizeof(dcb);
+    if (GetCommState(h, &dcb)) {
+        dcb.BaudRate = baud;
+        dcb.ByteSize = 8;
+        dcb.Parity   = NOPARITY;
+        dcb.StopBits = ONESTOPBIT;
+        SetCommState(h, &dcb);
+    }
+
+    to.ReadIntervalTimeout         = 50;
+    to.ReadTotalTimeoutMultiplier  = 0;
+    to.ReadTotalTimeoutConstant    = 200;
+    to.WriteTotalTimeoutMultiplier = 0;
+    to.WriteTotalTimeoutConstant   = 0;
+    SetCommTimeouts(h, &to);
+    PurgeComm(h, PURGE_RXCLEAR | PURGE_TXCLEAR);
+
+    return h;
+}
+
 /* ─────────── Wątek GPS ─────────── */
 static DWORD WINAPI gps_thread(LPVOID param)
 {
     static char rx[4096];
-    int  rxn = 0;
+    static char buf[512];
     DWORD i, got;
-    char buf[512];
+    int  rxn;
     (void)param;
 
-    while (g_running) {
-        if (g_hGps == INVALID_HANDLE_VALUE) {
-            DCB dcb;
-            COMMTIMEOUTS to;
+    /* ── FAZA 1: znalezienie portu i prędkości ── */
+    {
+        int ok = 0;
+        int pi, bi;
 
-            g_hGps = CreateFileW(GPS_PORT, GENERIC_READ,
-                                 FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                 NULL, OPEN_EXISTING, 0, NULL);
-            if (g_hGps == INVALID_HANDLE_VALUE) { Sleep(1500); continue; }
-
-            memset(&dcb, 0, sizeof(dcb));
-            dcb.DCBlength = sizeof(dcb);
-            if (GetCommState(g_hGps, &dcb)) {
-                dcb.BaudRate = GPS_BAUD;
-                dcb.ByteSize = 8;
-                dcb.Parity   = NOPARITY;
-                dcb.StopBits = ONESTOPBIT;
-                SetCommState(g_hGps, &dcb);
+        /* jeśli użytkownik zafiksował port, spróbuj najpierw jego */
+        if (FIXED_PORT[0]) {
+            g_hGps = open_port(FIXED_PORT, FIXED_BAUD ? FIXED_BAUD : CBR_4800);
+            if (g_hGps != INVALID_HANDLE_VALUE) {
+                wcscpy(g_used_port, FIXED_PORT);
+                g_used_baud    = FIXED_BAUD ? FIXED_BAUD : CBR_4800;
+                g_scanning     = 0;
+                g_probe_result = 1;
+                ok = 1;
             }
-            to.ReadIntervalTimeout         = 20;
-            to.ReadTotalTimeoutMultiplier  = 0;
-            to.ReadTotalTimeoutConstant    = 200;
-            to.WriteTotalTimeoutMultiplier = 0;
-            to.WriteTotalTimeoutConstant   = 0;
-            SetCommTimeouts(g_hGps, &to);
-            rxn = 0;
         }
 
+        for (pi = 0; pi < N_PORTS && !ok && g_running; pi++) {
+            for (bi = 0; bi < N_BAUDS && !ok && g_running; bi++) {
+                HANDLE h;
+                int saw = 0;
+                DWORD deadline;
+
+                h = open_port(g_ports[pi], g_bauds[bi]);
+                if (h == INVALID_HANDLE_VALUE) continue;
+
+                /* nasłuch 2 s — szukamy choć jednej pełnej linii NMEA */
+                rxn = 0;
+                deadline = GetTickCount() + 2000;
+                while (GetTickCount() < deadline && g_running && !saw) {
+                    got = 0;
+                    if (!ReadFile(h, buf, sizeof(buf), &got, NULL) || got == 0)
+                        continue;
+                    for (i = 0; i < got; i++) {
+                        char c = buf[i];
+                        if (c == '\n' || c == '\r') {
+                            if (rxn > 6 && rx[0] == '$') { saw = 1; break; }
+                            rxn = 0;
+                        } else if (c == '$') {
+                            rxn = 0;
+                            rx[rxn++] = c;
+                        } else if (rxn < (int)sizeof(rx) - 2) {
+                            rx[rxn++] = c;
+                        } else {
+                            rxn = 0;
+                        }
+                    }
+                }
+
+                if (saw) {
+                    g_hGps         = h;
+                    wcscpy(g_used_port, g_ports[pi]);
+                    g_used_baud    = g_bauds[bi];
+                    g_scanning     = 0;
+                    g_probe_result = 1;
+                    ok = 1;
+                } else {
+                    CloseHandle(h);
+                }
+            }
+        }
+
+        if (!ok) {
+            g_scanning     = 0;
+            g_probe_result = -1;
+            return 0;
+        }
+    }
+
+    /* ── FAZA 2: normalny odczyt ── */
+    rxn = 0;
+    while (g_running) {
         got = 0;
         if (!ReadFile(g_hGps, buf, sizeof(buf), &got, NULL) || got == 0) {
             Sleep(50);
             continue;
         }
-
         for (i = 0; i < got; i++) {
             char c = buf[i];
             if (c == '\n' || c == '\r') {
@@ -247,7 +344,6 @@ static void fill(HDC dc, int x, int y, int w, int h, COLORREF c)
     DeleteObject(b);
 }
 
-/* Tekst w lewym górnym rogu punktu (x,y) */
 static void text_at(HDC dc, int x, int y, const WCHAR *s, COLORREF c, HFONT f)
 {
     RECT r;
@@ -260,7 +356,6 @@ static void text_at(HDC dc, int x, int y, const WCHAR *s, COLORREF c, HFONT f)
     SelectObject(dc, old);
 }
 
-/* Szerokość tekstu — DT_CALCRECT mierzy bez rysowania */
 static int text_w(HDC dc, const WCHAR *s, HFONT f)
 {
     RECT r;
@@ -322,16 +417,26 @@ static void draw_screen(HDC dc, int W, int H)
 
     fill(dc, 0, 0, W, H, C_BG);
 
-    /* pasek statusu */
-    fill(dc, 0, 0, W, 20, gpsOk ? C_ACCENT_D : RGB(42, 26, 26));
-    if (gpsOk) {
-        wsprintfW(buf, L"GPS OK  \xB7  %d sat", g_sats);
+    /* ── pasek statusu ── */
+    if (g_scanning) {
+        fill(dc, 0, 0, W, 20, C_WARNBG);
+        text_at(dc, 6, 3, L"szukam portu GPS...", C_WARN, g_fLabel);
+    } else if (g_probe_result == -1) {
+        fill(dc, 0, 0, W, 20, C_ERRBG);
+        text_at(dc, 6, 3, L"BRAK GPS - zly port lub baud", C_ERR, g_fLabel);
+    } else if (gpsOk) {
+        fill(dc, 0, 0, W, 20, C_ACCENT_D);
+        wsprintfW(buf, L"%s %d baud  \xB7  %d sat",
+                  g_used_port, (int)g_used_baud, g_sats);
         text_at(dc, 6, 3, buf, C_ACCENT, g_fLabel);
     } else {
-        text_at(dc, 6, 3, L"szukam satelitow...", C_WARN, g_fLabel);
+        fill(dc, 0, 0, W, 20, C_WARNBG);
+        wsprintfW(buf, L"%s %d baud - czekam na fix",
+                  g_used_port, (int)g_used_baud);
+        text_at(dc, 6, 3, buf, C_WARN, g_fLabel);
     }
 
-    /* prędkość */
+    /* ── prędkość ── */
     if (gpsOk) {
         int v = (int)(g_speed_kmh + 0.5);
         if (v < 0) v = 0;
@@ -346,7 +451,7 @@ static void draw_screen(HDC dc, int W, int H)
     text_center(dc, cx, spY, buf, cSp, g_fSpeed);
     text_center(dc, cx, spY + 116, L"km/h", C_DIM, g_fUnit);
 
-    /* licznik + wysokość */
+    /* ── licznik + wysokość ── */
     bw = (W - 18) / 2;
     bh = 60;
     by = H - bh - 34;
@@ -362,14 +467,15 @@ static void draw_screen(HDC dc, int W, int H)
     else       wcscpy(buf, L"-- m");
     text_at(dc, 22 + bw, by + 22, buf, gpsOk ? C_TEXT : C_DIM, g_fVal);
 
-    /* RESET */
+    /* ── RESET ── */
     rw = 100; rh = 24;
     rx = W - rw - 6;
     ry = H - rh - 6;
-    round_rect(dc, rx, ry, rw, rh, 6, C_ERRBG, RGB(120, 60, 60));
+    round_rect(dc, rx, ry, rw, rh, 6, C_BTN, C_BTNLINE);
     text_center(dc, rx + rw / 2, ry + 4, L"RESET", C_ERR, g_fBtn);
 }
 
+/* ─────────── Okno ─────────── */
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
@@ -426,13 +532,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR cmd, int show)
 {
     WNDCLASSW wc;
     MSG msg;
+    HWND hwnd;
     int W, H;
 
     (void)hPrev; (void)cmd; (void)show;
 
-    W  = GetSystemMetrics(SM_CXSCREEN);
-    H  = GetSystemMetrics(SM_CYSCREEN);
-    g_hGps = INVALID_HANDLE_VALUE;
+    W = GetSystemMetrics(SM_CXSCREEN);
+    H = GetSystemMetrics(SM_CYSCREEN);
 
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc   = WndProc;
@@ -442,14 +548,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR cmd, int show)
     wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     if (!RegisterClassW(&wc)) return 1;
 
-    if (!CreateWindowExW(0, L"LarkHUD", L"Lark HUD",
-                         WS_POPUP | WS_VISIBLE, 0, 0, W, H,
-                         NULL, NULL, hInst, NULL))
-        return 1;
+    hwnd = CreateWindowExW(0, L"LarkHUD", L"Lark HUD",
+                           WS_POPUP | WS_VISIBLE, 0, 0, W, H,
+                           NULL, NULL, hInst, NULL);
+    if (!hwnd) return 1;
 
     odo_load();
     CreateThread(NULL, 0, gps_thread, NULL, 0, NULL);
-    SetTimer(FindWindowW(L"LarkHUD", NULL), 1, 500, NULL);
+    SetTimer(hwnd, 1, 500, NULL);
 
     while (GetMessageW(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
