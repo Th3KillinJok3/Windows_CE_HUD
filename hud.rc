@@ -1,0 +1,4 @@
+#include <windows.h>
+
+/* Ikona (opcjonalna – możesz podmienić hud.ico) */
+IDI_APP ICON "hud.ico"
