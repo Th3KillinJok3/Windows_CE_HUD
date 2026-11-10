@@ -14,7 +14,7 @@
 #include <wchar.h>
 
 /* ─────────── CONFIG ─────────── */
-#define GPS_PORT      L"COM2:"
+#define GPS_PORT      L"COM6:"
 #define GPS_BAUD      CBR_4800
 #define ODO_FILE_A    "\\Storage Card\\hud_odo.txt"
 #define ODO_FILE_B    "\\SDMMC\\hud_odo.txt"
