@@ -6,24 +6,26 @@
  *   arm-mingw32ce-gcc -O2 -Wall -DUNICODE -D_UNICODE -o hud.exe hud.c \
  *       -lcoredll -Wl,-subsystem,windows
  *
- * Automatycznie szuka portu GPS (COM1/2/3/6/7/9) i prędkości (4800/9600).
- * Znaleziony port i baud są pokazywane na górnym pasku.
+ * Wersja z LOGOWANIEM do \Storage Card\hud_log.txt
  */
 
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
 #include <math.h>
 #include <wchar.h>
 
 /* ─────────── CONFIG ─────────── */
 #define ODO_FILE_A    "\\Storage Card\\hud_odo.txt"
 #define ODO_FILE_B    "\\SDMMC\\hud_odo.txt"
+#define LOG_FILE      "\\Storage Card\\hud_log.txt"
+#define LOG_FILE_B    "\\SDMMC\\hud_log.txt"
 
-/* Po znalezieniu portu wpisz go tu, żeby start był natychmiastowy.
+/* Po znalezieniu portu wpisz go tu — start będzie natychmiastowy.
  * Zostaw 0, aby skanować za każdym razem. */
-#define FIXED_PORT    L""          /* np. L"COM2:" */
-#define FIXED_BAUD    0            /* np. CBR_4800 */
+#define FIXED_PORT    L""
+#define FIXED_BAUD    0
 
 /* ─────────── Kolory ─────────── */
 #define C_BG        RGB(10, 15, 13)
@@ -42,6 +44,28 @@
 
 #define PI_D 3.14159265358979323846
 
+/* ─────────── Log ─────────── */
+static FILE *g_log = NULL;
+
+static void log_open(void)
+{
+    g_log = fopen(LOG_FILE, "w");
+    if (!g_log) g_log = fopen(LOG_FILE_B, "w");
+    if (!g_log) return;
+    fprintf(g_log, "=== Lark HUD log ===\n");
+    fflush(g_log);
+}
+
+static void logf_(const char *fmt, ...)
+{
+    va_list ap;
+    if (!g_log) return;
+    va_start(ap, fmt);
+    vfprintf(g_log, fmt, ap);
+    va_end(ap);
+    fflush(g_log);
+}
+
 /* ─────────── Stan GPS ─────────── */
 static volatile int    g_fix;
 static volatile int    g_sats;
@@ -59,10 +83,10 @@ static const DWORD  g_bauds[] = { CBR_4800, CBR_9600 };
 #define N_PORTS (int)(sizeof(g_ports) / sizeof(g_ports[0]))
 #define N_BAUDS (int)(sizeof(g_bauds) / sizeof(g_bauds[0]))
 
-static volatile int  g_scanning = 1;
-static WCHAR         g_used_port[16] = L"?";
+static volatile int   g_scanning = 1;
+static WCHAR          g_used_port[16] = L"?";
 static volatile DWORD g_used_baud;
-static volatile int  g_probe_result;   /* 0=szuka  1=OK  -1=brak */
+static volatile int   g_probe_result;   /* 0=szuka  1=OK  -1=brak */
 
 /* ─────────── Licznik ─────────── */
 static double g_odo_km = 0.0;
@@ -75,6 +99,13 @@ static HFONT g_fSpeed, g_fUnit, g_fLabel, g_fVal, g_fBtn;
 
 /* ─────────── Pomocnicze ─────────── */
 static double deg2rad(double d) { return d * PI_D / 180.0; }
+
+static void w2a(const WCHAR *src, char *dst, int maxlen)
+{
+    int i;
+    for (i = 0; i < maxlen - 1 && src[i]; i++) dst[i] = (char)src[i];
+    dst[i] = 0;
+}
 
 static double haversine_m(double lat1, double lon1, double lat2, double lon2)
 {
@@ -175,17 +206,25 @@ static void nmea_line(char *line)
     else if (!strcmp(type, "GGA")) parse_gga(f, n);
 }
 
-/* ─────────── Otwarcie portu z zadanymi parametrami ─────────── */
+/* ─────────── Otwarcie portu ─────────── */
 static HANDLE open_port(const WCHAR *port, DWORD baud)
 {
     HANDLE h;
     DCB dcb;
     COMMTIMEOUTS to;
+    char name[32];
+
+    w2a(port, name, sizeof(name));
 
     h = CreateFileW(port, GENERIC_READ,
                     FILE_SHARE_READ | FILE_SHARE_WRITE,
                     NULL, OPEN_EXISTING, 0, NULL);
-    if (h == INVALID_HANDLE_VALUE) return INVALID_HANDLE_VALUE;
+    if (h == INVALID_HANDLE_VALUE) {
+        logf_("OPEN %s @%d -> FAIL (err %d)\n",
+              name, (int)baud, (int)GetLastError());
+        return INVALID_HANDLE_VALUE;
+    }
+    logf_("OPEN %s @%d -> OK\n", name, (int)baud);
 
     memset(&dcb, 0, sizeof(dcb));
     dcb.DCBlength = sizeof(dcb);
@@ -194,7 +233,10 @@ static HANDLE open_port(const WCHAR *port, DWORD baud)
         dcb.ByteSize = 8;
         dcb.Parity   = NOPARITY;
         dcb.StopBits = ONESTOPBIT;
-        SetCommState(h, &dcb);
+        if (!SetCommState(h, &dcb))
+            logf_("  SetCommState FAIL err %d\n", (int)GetLastError());
+    } else {
+        logf_("  GetCommState FAIL err %d\n", (int)GetLastError());
     }
 
     to.ReadIntervalTimeout         = 50;
@@ -217,12 +259,13 @@ static DWORD WINAPI gps_thread(LPVOID param)
     int  rxn;
     (void)param;
 
-    /* ── FAZA 1: znalezienie portu i prędkości ── */
+    logf_("gps_thread start\n");
+
+    /* ── FAZA 1: szukanie portu i prędkości ── */
     {
         int ok = 0;
         int pi, bi;
 
-        /* jeśli użytkownik zafiksował port, spróbuj najpierw jego */
         if (FIXED_PORT[0]) {
             g_hGps = open_port(FIXED_PORT, FIXED_BAUD ? FIXED_BAUD : CBR_4800);
             if (g_hGps != INVALID_HANDLE_VALUE) {
@@ -231,6 +274,7 @@ static DWORD WINAPI gps_thread(LPVOID param)
                 g_scanning     = 0;
                 g_probe_result = 1;
                 ok = 1;
+                logf_("using FIXED_PORT\n");
             }
         }
 
@@ -238,18 +282,33 @@ static DWORD WINAPI gps_thread(LPVOID param)
             for (bi = 0; bi < N_BAUDS && !ok && g_running; bi++) {
                 HANDLE h;
                 int saw = 0;
-                DWORD deadline;
+                DWORD deadline, total = 0;
+                int shown = 0;
 
                 h = open_port(g_ports[pi], g_bauds[bi]);
                 if (h == INVALID_HANDLE_VALUE) continue;
 
-                /* nasłuch 2 s — szukamy choć jednej pełnej linii NMEA */
                 rxn = 0;
                 deadline = GetTickCount() + 2000;
                 while (GetTickCount() < deadline && g_running && !saw) {
                     got = 0;
                     if (!ReadFile(h, buf, sizeof(buf), &got, NULL) || got == 0)
                         continue;
+                    total += got;
+
+                    if (!shown && g_log) {
+                        int k, lim = got < 40 ? (int)got : 40;
+                        logf_("  RX[%d]: ", (int)got);
+                        for (k = 0; k < lim; k++) {
+                            unsigned char c = (unsigned char)buf[k];
+                            if (c >= 32 && c < 127) fputc(c, g_log);
+                            else fprintf(g_log, "\\x%02X", c);
+                        }
+                        fprintf(g_log, "\n");
+                        fflush(g_log);
+                        shown = 1;
+                    }
+
                     for (i = 0; i < got; i++) {
                         char c = buf[i];
                         if (c == '\n' || c == '\r') {
@@ -266,6 +325,9 @@ static DWORD WINAPI gps_thread(LPVOID param)
                     }
                 }
 
+                logf_("  total %d bytes, nmea=%s\n",
+                      (int)total, saw ? "YES" : "no");
+
                 if (saw) {
                     g_hGps         = h;
                     wcscpy(g_used_port, g_ports[pi]);
@@ -273,6 +335,7 @@ static DWORD WINAPI gps_thread(LPVOID param)
                     g_scanning     = 0;
                     g_probe_result = 1;
                     ok = 1;
+                    logf_("FOUND %s @%d\n", (int)0, (int)g_bauds[bi]);
                 } else {
                     CloseHandle(h);
                 }
@@ -282,33 +345,45 @@ static DWORD WINAPI gps_thread(LPVOID param)
         if (!ok) {
             g_scanning     = 0;
             g_probe_result = -1;
+            logf_("NO GPS PORT FOUND\n");
             return 0;
         }
     }
 
     /* ── FAZA 2: normalny odczyt ── */
+    logf_("entering read loop\n");
     rxn = 0;
-    while (g_running) {
-        got = 0;
-        if (!ReadFile(g_hGps, buf, sizeof(buf), &got, NULL) || got == 0) {
-            Sleep(50);
-            continue;
-        }
-        for (i = 0; i < got; i++) {
-            char c = buf[i];
-            if (c == '\n' || c == '\r') {
-                if (rxn > 6) { rx[rxn] = 0; nmea_line(rx); }
-                rxn = 0;
-            } else if (c == '$') {
-                rxn = 0;
-                rx[rxn++] = c;
-            } else if (rxn < (int)sizeof(rx) - 2) {
-                rx[rxn++] = c;
-            } else {
-                rxn = 0;
+    {
+        DWORD lines = 0;
+        while (g_running) {
+            got = 0;
+            if (!ReadFile(g_hGps, buf, sizeof(buf), &got, NULL) || got == 0) {
+                Sleep(50);
+                continue;
+            }
+            for (i = 0; i < got; i++) {
+                char c = buf[i];
+                if (c == '\n' || c == '\r') {
+                    if (rxn > 6) {
+                        rx[rxn] = 0;
+                        nmea_line(rx);
+                        if ((lines++ % 40) == 0)
+                            logf_("line %d: %.60s fix=%d sats=%d\n",
+                                  (int)lines, rx, g_fix, g_sats);
+                    }
+                    rxn = 0;
+                } else if (c == '$') {
+                    rxn = 0;
+                    rx[rxn++] = c;
+                } else if (rxn < (int)sizeof(rx) - 2) {
+                    rx[rxn++] = c;
+                } else {
+                    rxn = 0;
+                }
             }
         }
     }
+    logf_("gps_thread exit\n");
     return 0;
 }
 
@@ -417,7 +492,6 @@ static void draw_screen(HDC dc, int W, int H)
 
     fill(dc, 0, 0, W, H, C_BG);
 
-    /* ── pasek statusu ── */
     if (g_scanning) {
         fill(dc, 0, 0, W, 20, C_WARNBG);
         text_at(dc, 6, 3, L"szukam portu GPS...", C_WARN, g_fLabel);
@@ -436,7 +510,6 @@ static void draw_screen(HDC dc, int W, int H)
         text_at(dc, 6, 3, buf, C_WARN, g_fLabel);
     }
 
-    /* ── prędkość ── */
     if (gpsOk) {
         int v = (int)(g_speed_kmh + 0.5);
         if (v < 0) v = 0;
@@ -451,7 +524,6 @@ static void draw_screen(HDC dc, int W, int H)
     text_center(dc, cx, spY, buf, cSp, g_fSpeed);
     text_center(dc, cx, spY + 116, L"km/h", C_DIM, g_fUnit);
 
-    /* ── licznik + wysokość ── */
     bw = (W - 18) / 2;
     bh = 60;
     by = H - bh - 34;
@@ -467,7 +539,6 @@ static void draw_screen(HDC dc, int W, int H)
     else       wcscpy(buf, L"-- m");
     text_at(dc, 22 + bw, by + 22, buf, gpsOk ? C_TEXT : C_DIM, g_fVal);
 
-    /* ── RESET ── */
     rw = 100; rh = 24;
     rx = W - rw - 6;
     ry = H - rh - 6;
@@ -505,6 +576,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             g_odo_km = 0.0;
             g_have_last = 0;
             odo_save();
+            logf_("odometer reset by user\n");
             InvalidateRect(hwnd, NULL, FALSE);
         }
         return 0;
@@ -540,20 +612,31 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR cmd, int show)
     W = GetSystemMetrics(SM_CXSCREEN);
     H = GetSystemMetrics(SM_CYSCREEN);
 
+    log_open();
+    logf_("=== start, screen %dx%d ===\n", W, H);
+
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc   = WndProc;
     wc.hInstance     = hInst;
     wc.hCursor       = NULL;
     wc.lpszClassName = L"LarkHUD";
     wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    if (!RegisterClassW(&wc)) return 1;
+    if (!RegisterClassW(&wc)) {
+        logf_("RegisterClass FAILED\n");
+        return 1;
+    }
 
     hwnd = CreateWindowExW(0, L"LarkHUD", L"Lark HUD",
                            WS_POPUP | WS_VISIBLE, 0, 0, W, H,
                            NULL, NULL, hInst, NULL);
-    if (!hwnd) return 1;
+    if (!hwnd) {
+        logf_("CreateWindow FAILED\n");
+        return 1;
+    }
 
     odo_load();
+    logf_("odo loaded: %.3f km\n", g_odo_km);
+
     CreateThread(NULL, 0, gps_thread, NULL, 0, NULL);
     SetTimer(hwnd, 1, 500, NULL);
 
@@ -565,5 +648,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR cmd, int show)
     g_running = 0;
     if (g_hGps != INVALID_HANDLE_VALUE) CloseHandle(g_hGps);
     odo_save();
+    logf_("=== exit ===\n");
+    if (g_log) fclose(g_log);
     return 0;
 }
