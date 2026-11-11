@@ -1,50 +1,72 @@
 /*
- * hud.c — prędkościomierz + licznik km + wysokość
- * Windows CE 5.0 / ARM (Lark FreeBird 35.7, S3C2412, 320x240)
+ * hud.c — predkosciomierz + licznik km + wysokosc
+ * Windows CE 5.0 / ARM (Lark FreeBird 35.7, 320x240)
+ * Wersja MAX: GPD0 power-on, SiRF+MTK wakeup, binarny SiRF,
+ * skan COM0-9, log co minute, X, 3 motywy, pixlowaty font.
  *
  * Kompilacja (CeGCC 9.3.0):
  *   arm-mingw32ce-gcc -O2 -Wall -DUNICODE -D_UNICODE -o hud.exe hud.c \
  *       -lcoredll -Wl,-subsystem,windows
- *
- * Wersja z LOGOWANIEM do \Storage Card\hud_log.txt
  */
 
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
-#include <math.h>
 #include <wchar.h>
 
-/* ─────────── CONFIG ─────────── */
+/* ============ CONFIG ============ */
 #define ODO_FILE_A    "\\Storage Card\\hud_odo.txt"
 #define ODO_FILE_B    "\\SDMMC\\hud_odo.txt"
 #define LOG_FILE      "\\Storage Card\\hud_log.txt"
 #define LOG_FILE_B    "\\SDMMC\\hud_log.txt"
+#define THEME_FILE_A  "\\Storage Card\\hud_theme.txt"
+#define THEME_FILE_B  "\\SDMMC\\hud_theme.txt"
 
-/* Po znalezieniu portu wpisz go tu — start będzie natychmiastowy.
- * Zostaw 0, aby skanować za każdym razem. */
 #define FIXED_PORT    L""
 #define FIXED_BAUD    0
 
-/* ─────────── Kolory ─────────── */
-#define C_BG        RGB(10, 15, 13)
-#define C_PANEL     RGB(19, 26, 23)
-#define C_LINE      RGB(36, 49, 43)
-#define C_TEXT      RGB(232, 240, 236)
-#define C_DIM       RGB(125, 145, 138)
-#define C_ACCENT    RGB(74, 222, 128)
-#define C_ACCENT_D  RGB(28, 58, 42)
-#define C_WARN      RGB(251, 191, 36)
-#define C_WARNBG    RGB(42, 34, 12)
-#define C_ERR       RGB(248, 113, 113)
-#define C_ERRBG     RGB(42, 26, 26)
-#define C_BTN       RGB(60, 32, 32)
-#define C_BTNLINE   RGB(120, 60, 60)
-
 #define PI_D 3.14159265358979323846
+#define IOCTL_SERVICE_REFRESH 0x4100000C
+#define IOCTL_SERVICE_START   0x41000004
 
-/* ─────────── Log ─────────── */
+/* ============ MOTYWY ============ */
+typedef struct {
+    COLORREF bg, panel, line, text, dim;
+    COLORREF accent, accentD, warn, warnBg, err, errBg, btn, btnLine;
+} Theme;
+
+static const Theme THEMES[3] = {
+    { RGB(10,15,13), RGB(19,26,23), RGB(36,49,43), RGB(232,240,236),
+      RGB(125,145,138), RGB(74,222,128), RGB(28,58,42),
+      RGB(251,191,36), RGB(42,34,12), RGB(248,113,113), RGB(42,26,26),
+      RGB(60,32,32), RGB(120,60,60) },
+    { RGB(12,10,6), RGB(24,19,10), RGB(52,40,16), RGB(255,243,220),
+      RGB(160,140,110), RGB(251,191,36), RGB(66,48,10),
+      RGB(125,211,252), RGB(20,32,44), RGB(248,113,113), RGB(42,26,26),
+      RGB(60,32,32), RGB(120,60,60) },
+    { RGB(6,10,16), RGB(12,20,28), RGB(24,42,58), RGB(220,238,255),
+      RGB(120,150,175), RGB(96,200,255), RGB(16,48,72),
+      RGB(251,191,36), RGB(42,34,12), RGB(248,113,113), RGB(42,26,26),
+      RGB(60,32,32), RGB(120,60,60) },
+};
+static const WCHAR *THEME_NAMES[3] = { L"ZIELONY", L"AMBER", L"NIEBIESKI" };
+static int g_theme = 0;
+#define TBG     (THEMES[g_theme].bg)
+#define TPANEL  (THEMES[g_theme].panel)
+#define TLINE   (THEMES[g_theme].line)
+#define TTEXT   (THEMES[g_theme].text)
+#define TDIM    (THEMES[g_theme].dim)
+#define TAC     (THEMES[g_theme].accent)
+#define TACD    (THEMES[g_theme].accentD)
+#define TWN     (THEMES[g_theme].warn)
+#define TWNBG   (THEMES[g_theme].warnBg)
+#define TER     (THEMES[g_theme].err)
+#define TERBG   (THEMES[g_theme].errBg)
+#define TBTN    (THEMES[g_theme].btn)
+#define TBTNL   (THEMES[g_theme].btnLine)
+
+/* ============ LOG (bez bufora) ============ */
 static FILE *g_log = NULL;
 
 static void log_open(void)
@@ -52,8 +74,8 @@ static void log_open(void)
     g_log = fopen(LOG_FILE, "w");
     if (!g_log) g_log = fopen(LOG_FILE_B, "w");
     if (!g_log) return;
+    setvbuf(g_log, NULL, _IONBF, 0);
     fprintf(g_log, "=== Lark HUD log ===\n");
-    fflush(g_log);
 }
 
 static void logf_(const char *fmt, ...)
@@ -66,80 +88,133 @@ static void logf_(const char *fmt, ...)
     fflush(g_log);
 }
 
-/* ─────────── Stan GPS ─────────── */
+/* ============ STAN GPS ============ */
 static volatile int    g_fix;
-static volatile int    g_sats;
-static volatile double g_speed_kmh;
-static volatile double g_alt_m;
+static volatile int    g_sats;       /* uzyte (GGA) */
+static volatile int    g_sats_view;  /* widoczne (GSV) */
+static volatile int    g_speed_kmh;
+static volatile int    g_alt_m;
 static volatile double g_lat, g_lon;
 
-static HANDLE          g_hGps = INVALID_HANDLE_VALUE;
-static volatile int    g_running = 1;
+static HANDLE       g_hGps = INVALID_HANDLE_VALUE;
+static volatile int g_running = 1;
 
-/* ─────────── Auto-skan ─────────── */
-static const WCHAR *g_ports[] = { L"COM1:", L"COM2:", L"COM3:",
-                                  L"COM6:", L"COM7:", L"COM9:" };
-static const DWORD  g_bauds[] = { CBR_4800, CBR_9600 };
-#define N_PORTS (int)(sizeof(g_ports) / sizeof(g_ports[0]))
-#define N_BAUDS (int)(sizeof(g_bauds) / sizeof(g_bauds[0]))
+/* ============ AUTO-SKAN ============ */
+static const WCHAR *g_ports[] = {
+    L"COM1:", L"COM2:", L"COM3:", L"COM4:", L"COM5:",
+    L"COM6:", L"COM7:", L"COM8:", L"COM9:",
+    L"COM0:", L"GPD0:", L"GPS1:"
+};
+static const DWORD g_bauds[] = {
+    CBR_4800, CBR_9600, CBR_38400, CBR_57600, CBR_19200, CBR_115200
+};
+#define N_PORTS (int)(sizeof(g_ports)/sizeof(g_ports[0]))
+#define N_BAUDS (int)(sizeof(g_bauds)/sizeof(g_bauds[0]))
 
 static volatile int   g_scanning = 1;
 static WCHAR          g_used_port[16] = L"?";
 static volatile DWORD g_used_baud;
-static volatile int   g_probe_result;   /* 0=szuka  1=OK  -1=brak */
+static volatile int   g_probe_result;
+static volatile DWORD g_total_bytes;
+static volatile DWORD g_nmea_count;
+static volatile DWORD g_last_rx_tick;
 
-/* ─────────── Licznik ─────────── */
+/* ============ LICZNIK ============ */
 static double g_odo_km = 0.0;
 static double g_last_lat, g_last_lon;
 static int    g_have_last;
 static DWORD  g_last_tick;
 
-/* ─────────── Fonty ─────────── */
+/* ============ FONTY (pixlowate) ============ */
 static HFONT g_fSpeed, g_fUnit, g_fLabel, g_fVal, g_fBtn;
 
-/* ─────────── Pomocnicze ─────────── */
+/* ============ MATEMATYKA (bez libc sin/cos) ============ */
 static double deg2rad(double d) { return d * PI_D / 180.0; }
+
+static double my_cos(double x)
+{
+    double x2, x4, x6, x8, x10, t;
+    while (x > PI_D)  x -= 2*PI_D;
+    while (x < -PI_D) x += 2*PI_D;
+    x2 = x*x;
+    t = 1.0 - x2/2.0;
+    x4 = x2*x2;  t += x4/24.0;
+    x6 = x4*x2;  t -= x6/720.0;
+    x8 = x4*x4;  t += x8/40320.0;
+    x10 = x8*x2; t -= x10/3628800.0;
+    return t;
+}
+
+static double my_sqrt(double x)
+{
+    double r; int i;
+    if (x <= 0) return 0;
+    r = x > 1 ? x : 1;
+    for (i = 0; i < 20; i++) r = 0.5*(r + x/r);
+    return r;
+}
+
+static double dist_m(double lat1, double lon1, double lat2, double lon2)
+{
+    const double R = 6371000.0;
+    double avg = deg2rad((lat1+lat2)/2.0);
+    double dx = deg2rad(lon2-lon1) * my_cos(avg);
+    double dy = deg2rad(lat2-lat1);
+    return R * my_sqrt(dx*dx + dy*dy);
+}
 
 static void w2a(const WCHAR *src, char *dst, int maxlen)
 {
     int i;
-    for (i = 0; i < maxlen - 1 && src[i]; i++) dst[i] = (char)src[i];
+    for (i = 0; i < maxlen-1 && src[i]; i++) dst[i] = (char)src[i];
     dst[i] = 0;
 }
 
-static double haversine_m(double lat1, double lon1, double lat2, double lon2)
+/* ============ MOTYW / LICZNIK pliki ============ */
+static void theme_load(void)
 {
-    const double R = 6371000.0;
-    double dlat = deg2rad(lat2 - lat1);
-    double dlon = deg2rad(lon2 - lon1);
-    double a = sin(dlat / 2) * sin(dlat / 2) +
-               cos(deg2rad(lat1)) * cos(deg2rad(lat2)) *
-               sin(dlon / 2) * sin(dlon / 2);
-    if (a < 0) a = 0;
-    if (a > 1) a = 1;
-    return R * 2.0 * atan2(sqrt(a), sqrt(1.0 - a));
+    FILE *f = fopen(THEME_FILE_A, "r");
+    int v = 0;
+    if (!f) f = fopen(THEME_FILE_B, "r");
+    if (f) {
+        if (fscanf(f, "%d", &v) == 1 && v >= 0 && v < 3) g_theme = v;
+        fclose(f);
+    }
 }
 
-/* ─────────── Licznik: zapis / odczyt ─────────── */
+static void theme_save(void)
+{
+    FILE *f = fopen(THEME_FILE_A, "w");
+    if (!f) f = fopen(THEME_FILE_B, "w");
+    if (f) { fprintf(f, "%d\n", g_theme); fclose(f); }
+}
+
 static void odo_save(void)
 {
     FILE *f = fopen(ODO_FILE_A, "w");
+    int whole, frac;
     if (!f) f = fopen(ODO_FILE_B, "w");
-    if (f) { fprintf(f, "%.3f\n", g_odo_km); fclose(f); }
+    if (!f) { logf_("ODO SAVE FAIL\n"); return; }
+    whole = (int)g_odo_km;
+    frac  = (int)((g_odo_km - whole) * 1000.0);
+    if (frac < 0) frac = 0;
+    if (frac > 999) frac = 999;
+    fprintf(f, "%d.%03d\n", whole, frac);
+    fclose(f);
 }
 
 static void odo_load(void)
 {
     FILE *f = fopen(ODO_FILE_A, "r");
+    double v = 0.0;
     if (!f) f = fopen(ODO_FILE_B, "r");
     if (f) {
-        double v = 0.0;
         if (fscanf(f, "%lf", &v) == 1 && v >= 0.0 && v < 1e7) g_odo_km = v;
         fclose(f);
     }
 }
 
-/* ─────────── NMEA ─────────── */
+/* ============ NMEA ============ */
 static int split_nmea(char *line, char **fields, int maxf)
 {
     int n = 0;
@@ -151,7 +226,7 @@ static int split_nmea(char *line, char **fields, int maxf)
         p++;
     }
     if (n > 0) {
-        char *star = strchr(fields[n - 1], '*');
+        char *star = strchr(fields[n-1], '*');
         if (star) *star = 0;
     }
     return n;
@@ -162,22 +237,20 @@ static void parse_rmc(char **f, int n)
     double knots;
     if (n < 8) return;
     if (f[2][0] != 'A') { g_fix = 0; return; }
-
     knots = atof(f[7]);
-    g_speed_kmh = knots * 1.852;
-
+    g_speed_kmh = (int)(knots * 1.852 + 0.5);
+    if (g_speed_kmh < 0) g_speed_kmh = 0;
+    if (g_speed_kmh > 999) g_speed_kmh = 999;
     if (f[3][0] && f[5][0]) {
         double rawlat = atof(f[3]);
         double rawlon = atof(f[5]);
-        int    dlat = (int)(rawlat / 100.0);
-        int    dlon = (int)(rawlon / 100.0);
-        double lat = dlat + (rawlat - dlat * 100.0) / 60.0;
-        double lon = dlon + (rawlon - dlon * 100.0) / 60.0;
-        if (f[4][0] == 'S') lat = -lat;
-        if (f[6][0] == 'W') lon = -lon;
-        g_lat = lat;
-        g_lon = lon;
-        g_fix = 1;
+        int dlat = (int)(rawlat/100.0);
+        int dlon = (int)(rawlon/100.0);
+        double lat = dlat + (rawlat - dlat*100.0)/60.0;
+        double lon = dlon + (rawlon - dlon*100.0)/60.0;
+        if (f[4][0]=='S') lat = -lat;
+        if (f[6][0]=='W') lon = -lon;
+        g_lat = lat; g_lon = lon; g_fix = 1;
     }
 }
 
@@ -186,10 +259,19 @@ static void parse_gga(char **f, int n)
     if (n < 10) return;
     g_sats = atoi(f[7]);
     if (atoi(f[6]) > 0) {
-        g_alt_m = atof(f[9]);
+        g_alt_m = atoi(f[9]);
         g_fix = 1;
     } else {
         g_fix = 0;
+    }
+}
+
+static void parse_gsv(char **f, int n)
+{
+    if (n < 4) return;
+    {
+        int v = atoi(f[3]);
+        if (v >= 0 && v <= 32) g_sats_view = v;
     }
 }
 
@@ -202,11 +284,77 @@ static void nmea_line(char *line)
     s = f[0];
     if (strlen(s) < 5) return;
     type = s + strlen(s) - 3;
-    if (!strcmp(type, "RMC"))      parse_rmc(f, n);
-    else if (!strcmp(type, "GGA")) parse_gga(f, n);
+    g_nmea_count++;
+    if (!strcmp(type,"RMC")) parse_rmc(f,n);
+    else if (!strcmp(type,"GGA")) parse_gga(f,n);
+    else if (!strcmp(type,"GSV")) parse_gsv(f,n);
 }
 
-/* ─────────── Otwarcie portu ─────────── */
+/* ============ GPS POWER (GPD0) ============ */
+static void gps_power_on(void)
+{
+    HANDLE h;
+    DWORD ret = 0;
+    logf_("GPD0 power-on proba...\n");
+    h = CreateFileW(L"GPD0:", GENERIC_READ,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        logf_("  GPD0 brak (err=%d), pomijam\n", (int)GetLastError());
+        return;
+    }
+    if (DeviceIoControl(h, IOCTL_SERVICE_REFRESH, NULL,0,NULL,0,&ret,NULL))
+        logf_("  GPD0 REFRESH ok\n");
+    else
+        logf_("  GPD0 REFRESH fail err=%d\n", (int)GetLastError());
+    if (DeviceIoControl(h, IOCTL_SERVICE_START, NULL,0,NULL,0,&ret,NULL))
+        logf_("  GPD0 START ok\n");
+    else
+        logf_("  GPD0 START fail err=%d\n", (int)GetLastError());
+    CloseHandle(h);
+}
+
+/* ============ WYSYLANIE KOMEND (checksum liczony!) ============ */
+static void send_body(HANDLE h, const char *body)
+{
+    unsigned char cs = 0;
+    const char *p;
+    char full[128];
+    int len = 0, i;
+    DWORD w = 0;
+    for (p = body; *p; p++) cs ^= (unsigned char)(*p);
+    len = 0;
+    full[len++] = '$';
+    for (p = body; *p && len < 110; p++) full[len++] = *p;
+    full[len++] = '*';
+    {
+        const char *hex = "0123456789ABCDEF";
+        full[len++] = hex[(cs >> 4) & 15];
+        full[len++] = hex[cs & 15];
+    }
+    full[len++] = '\r'; full[len++] = '\n'; full[len] = 0;
+    WriteFile(h, full, (DWORD)len, &w, NULL);
+    for (i = 0; full[i]; i++) {
+        if (full[i] == '\r' || full[i] == '\n') break;
+    }
+    logf_("  TX: %s (w=%d)\n", body, (int)w);
+}
+
+static void wakeup_for_baud(HANDLE h, DWORD baud)
+{
+    char tmp[40];
+    int b = (int)baud;
+    sprintf(tmp, "PSRF100,1,%d,8,1,0", b);
+    send_body(h, tmp);
+    send_body(h, "PSRF103,00,00,01,01");
+    send_body(h, "PSRF103,02,00,01,01");
+    send_body(h, "PSRF103,03,00,01,01");
+    send_body(h, "PSRF103,04,00,01,01");
+    send_body(h, "PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0");
+    send_body(h, "PMTK220,1000");
+}
+
+/* ============ PORT ============ */
 static HANDLE open_port(const WCHAR *port, DWORD baud)
 {
     HANDLE h;
@@ -215,13 +363,10 @@ static HANDLE open_port(const WCHAR *port, DWORD baud)
     char name[32];
 
     w2a(port, name, sizeof(name));
-
-    h = CreateFileW(port, GENERIC_READ,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE,
-                    NULL, OPEN_EXISTING, 0, NULL);
+    h = CreateFileW(port, GENERIC_READ | GENERIC_WRITE,
+                    0, NULL, OPEN_EXISTING, 0, NULL);
     if (h == INVALID_HANDLE_VALUE) {
-        logf_("OPEN %s @%d -> FAIL (err %d)\n",
-              name, (int)baud, (int)GetLastError());
+        logf_("OPEN %s @%d -> FAIL err=%d\n", name, (int)baud, (int)GetLastError());
         return INVALID_HANDLE_VALUE;
     }
     logf_("OPEN %s @%d -> OK\n", name, (int)baud);
@@ -233,47 +378,46 @@ static HANDLE open_port(const WCHAR *port, DWORD baud)
         dcb.ByteSize = 8;
         dcb.Parity   = NOPARITY;
         dcb.StopBits = ONESTOPBIT;
-        if (!SetCommState(h, &dcb))
-            logf_("  SetCommState FAIL err %d\n", (int)GetLastError());
+        dcb.fDtrControl = DTR_CONTROL_ENABLE;
+        dcb.fRtsControl = RTS_CONTROL_ENABLE;
+        if (!SetCommState(h,&dcb))
+            logf_("  SetCommState FAIL err=%d\n",(int)GetLastError());
     } else {
-        logf_("  GetCommState FAIL err %d\n", (int)GetLastError());
+        logf_("  GetCommState FAIL err=%d\n",(int)GetLastError());
     }
-
-    to.ReadIntervalTimeout         = 50;
-    to.ReadTotalTimeoutMultiplier  = 0;
-    to.ReadTotalTimeoutConstant    = 200;
+    to.ReadIntervalTimeout = 50;
+    to.ReadTotalTimeoutMultiplier = 0;
+    to.ReadTotalTimeoutConstant = 200;
     to.WriteTotalTimeoutMultiplier = 0;
-    to.WriteTotalTimeoutConstant   = 0;
-    SetCommTimeouts(h, &to);
+    to.WriteTotalTimeoutConstant = 0;
+    SetCommTimeouts(h,&to);
     PurgeComm(h, PURGE_RXCLEAR | PURGE_TXCLEAR);
 
+    wakeup_for_baud(h, baud);
+    Sleep(400);
     return h;
 }
 
-/* ─────────── Wątek GPS ─────────── */
+/* ============ WATEK GPS ============ */
 static DWORD WINAPI gps_thread(LPVOID param)
 {
     static char rx[4096];
     static char buf[512];
-    DWORD i, got;
-    int  rxn;
     (void)param;
-
     logf_("gps_thread start\n");
 
-    /* ── FAZA 1: szukanie portu i prędkości ── */
-    {
-        int ok = 0;
-        int pi, bi;
+    while (g_running) {
+        int ok = 0, pi, bi;
+
+        g_scanning = 1;
+        g_probe_result = 0;
 
         if (FIXED_PORT[0]) {
-            g_hGps = open_port(FIXED_PORT, FIXED_BAUD ? FIXED_BAUD : CBR_4800);
-            if (g_hGps != INVALID_HANDLE_VALUE) {
+            HANDLE h = open_port(FIXED_PORT, FIXED_BAUD ? FIXED_BAUD : CBR_4800);
+            if (h != INVALID_HANDLE_VALUE) {
                 wcscpy(g_used_port, FIXED_PORT);
-                g_used_baud    = FIXED_BAUD ? FIXED_BAUD : CBR_4800;
-                g_scanning     = 0;
-                g_probe_result = 1;
-                ok = 1;
+                g_used_baud = FIXED_BAUD ? FIXED_BAUD : CBR_4800;
+                g_hGps = h; g_scanning = 0; g_probe_result = 1; ok = 1;
                 logf_("using FIXED_PORT\n");
             }
         }
@@ -281,23 +425,36 @@ static DWORD WINAPI gps_thread(LPVOID param)
         for (pi = 0; pi < N_PORTS && !ok && g_running; pi++) {
             for (bi = 0; bi < N_BAUDS && !ok && g_running; bi++) {
                 HANDLE h;
-                int saw = 0;
-                DWORD deadline, total = 0;
+                int saw = 0, sawbin = 0, rxn = 0;
+                DWORD deadline, total = 0, i, got;
                 int shown = 0;
 
                 h = open_port(g_ports[pi], g_bauds[bi]);
                 if (h == INVALID_HANDLE_VALUE) continue;
 
-                rxn = 0;
-                deadline = GetTickCount() + 2000;
+                deadline = GetTickCount() + 4000;
                 while (GetTickCount() < deadline && g_running && !saw) {
                     got = 0;
                     if (!ReadFile(h, buf, sizeof(buf), &got, NULL) || got == 0)
                         continue;
                     total += got;
-
+                    g_total_bytes += got;
+                    g_last_rx_tick = GetTickCount();
+                    {
+                        DWORD k;
+                        for (k = 0; k + 1 < got; k++) {
+                            if ((unsigned char)buf[k] == 0xA0 &&
+                                (unsigned char)buf[k+1] == 0xA2) {
+                                if (!sawbin) {
+                                    logf_("  SiRF BINARY wykryty! powtarzam wakeup\n");
+                                    wakeup_for_baud(h, g_bauds[bi]);
+                                }
+                                sawbin = 1;
+                            }
+                        }
+                    }
                     if (!shown && g_log) {
-                        int k, lim = got < 40 ? (int)got : 40;
+                        int k, lim = got < 48 ? (int)got : 48;
                         logf_("  RX[%d]: ", (int)got);
                         for (k = 0; k < lim; k++) {
                             unsigned char c = (unsigned char)buf[k];
@@ -308,347 +465,366 @@ static DWORD WINAPI gps_thread(LPVOID param)
                         fflush(g_log);
                         shown = 1;
                     }
-
                     for (i = 0; i < got; i++) {
                         char c = buf[i];
                         if (c == '\n' || c == '\r') {
                             if (rxn > 6 && rx[0] == '$') { saw = 1; break; }
                             rxn = 0;
                         } else if (c == '$') {
-                            rxn = 0;
+                            rxn = 0; rx[rxn++] = c;
+                        } else if (rxn < (int)sizeof(rx)-2) {
                             rx[rxn++] = c;
-                        } else if (rxn < (int)sizeof(rx) - 2) {
-                            rx[rxn++] = c;
-                        } else {
-                            rxn = 0;
-                        }
+                        } else rxn = 0;
                     }
                 }
-
-                logf_("  total %d bytes, nmea=%s\n",
-                      (int)total, saw ? "YES" : "no");
-
-                if (saw) {
-                    g_hGps         = h;
+                logf_("  total %d bytes nmea=%s bin=%s\n",
+                      (int)total, saw ? "YES" : "no", sawbin ? "YES" : "no");
+                if (saw || sawbin) {
+                    char pn[32];
+                    g_hGps = h;
                     wcscpy(g_used_port, g_ports[pi]);
-                    g_used_baud    = g_bauds[bi];
-                    g_scanning     = 0;
-                    g_probe_result = 1;
-                    ok = 1;
-                    logf_("FOUND %s @%d\n", (int)0, (int)g_bauds[bi]);
-                } else {
-                    CloseHandle(h);
-                }
+                    g_used_baud = g_bauds[bi];
+                    g_scanning = 0; g_probe_result = 1; ok = 1;
+                    w2a(g_ports[pi], pn, sizeof(pn));
+                    logf_("FOUND %s @%d%s\n", pn, (int)g_bauds[bi],
+                          sawbin && !saw ? " (binary, budze...)" : "");
+                } else CloseHandle(h);
             }
         }
 
         if (!ok) {
-            g_scanning     = 0;
-            g_probe_result = -1;
-            logf_("NO GPS PORT FOUND\n");
-            return 0;
-        }
-    }
-
-    /* ── FAZA 2: normalny odczyt ── */
-    logf_("entering read loop\n");
-    rxn = 0;
-    {
-        DWORD lines = 0;
-        while (g_running) {
-            got = 0;
-            if (!ReadFile(g_hGps, buf, sizeof(buf), &got, NULL) || got == 0) {
-                Sleep(50);
-                continue;
+            g_scanning = 0; g_probe_result = -1;
+            logf_("NO GPS PORT FOUND — retry za 5 s\n");
+            {
+                DWORD t0 = GetTickCount();
+                while (g_running && GetTickCount() - t0 < 5000) Sleep(500);
             }
-            for (i = 0; i < got; i++) {
-                char c = buf[i];
-                if (c == '\n' || c == '\r') {
-                    if (rxn > 6) {
-                        rx[rxn] = 0;
-                        nmea_line(rx);
-                        if ((lines++ % 40) == 0)
-                            logf_("line %d: %.60s fix=%d sats=%d\n",
-                                  (int)lines, rx, g_fix, g_sats);
+            continue;
+        }
+
+        {
+            int rxn = 0;
+            DWORD lines = 0, lastwake = GetTickCount();
+            logf_("entering read loop\n");
+            g_last_rx_tick = GetTickCount();
+            while (g_running) {
+                DWORD i, got = 0;
+                if (!ReadFile(g_hGps, buf, sizeof(buf), &got, NULL) || got == 0) {
+                    if (GetTickCount() - g_last_rx_tick > 10000) {
+                        logf_("WATCHDOG: 10 s ciszy, reskan\n");
+                        break;
                     }
-                    rxn = 0;
-                } else if (c == '$') {
-                    rxn = 0;
-                    rx[rxn++] = c;
-                } else if (rxn < (int)sizeof(rx) - 2) {
-                    rx[rxn++] = c;
-                } else {
-                    rxn = 0;
+                    /* podtrzymanie: wakeup co 5 s */
+                    if (GetTickCount() - lastwake > 5000) {
+                        wakeup_for_baud(g_hGps, g_used_baud);
+                        lastwake = GetTickCount();
+                    }
+                    Sleep(50);
+                    continue;
+                }
+                g_last_rx_tick = GetTickCount();
+                g_total_bytes += got;
+                for (i = 0; i < got; i++) {
+                    char c = buf[i];
+                    if (c == '\n' || c == '\r') {
+                        if (rxn > 6) {
+                            rx[rxn] = 0;
+                            nmea_line(rx);
+                            if ((lines++ % 60) == 0)
+                                logf_("line %d: %.64s fix=%d sats=%d/%d spd=%d\n",
+                                      (int)lines, rx, g_fix, g_sats,
+                                      g_sats_view, g_speed_kmh);
+                        }
+                        rxn = 0;
+                    } else if (c == '$') {
+                        rxn = 0; rx[rxn++] = c;
+                    } else if (rxn < (int)sizeof(rx)-2) {
+                        rx[rxn++] = c;
+                    } else rxn = 0;
                 }
             }
+            if (g_hGps != INVALID_HANDLE_VALUE) {
+                CloseHandle(g_hGps);
+                g_hGps = INVALID_HANDLE_VALUE;
+            }
+            logf_("read loop exit, reskan\n");
         }
     }
     logf_("gps_thread exit\n");
     return 0;
 }
 
-/* ─────────── Rysowanie ─────────── */
+/* ============ RYSOWANIE ============ */
 static HFONT mkfont(int size, int weight)
 {
     LOGFONTW lf;
     memset(&lf, 0, sizeof(lf));
-    lf.lfHeight         = size;
-    lf.lfWeight         = weight;
-    lf.lfCharSet        = DEFAULT_CHARSET;
-    lf.lfQuality        = ANTIALIASED_QUALITY;
-    lf.lfPitchAndFamily = DEFAULT_PITCH | FF_SWISS;
-    wcscpy(lf.lfFaceName, L"Tahoma");
+    lf.lfHeight = size;
+    lf.lfWeight = weight;
+    lf.lfCharSet = DEFAULT_CHARSET;
+    lf.lfQuality = NONANTIALIASED_QUALITY;
+    lf.lfPitchAndFamily = FIXED_PITCH | FF_MODERN;
+    wcscpy(lf.lfFaceName, L"Courier New");
     return CreateFontIndirectW(&lf);
 }
 
 static void make_fonts(void)
 {
-    g_fSpeed = mkfont(-110, FW_BOLD);
-    g_fUnit  = mkfont(-22,  FW_BOLD);
-    g_fLabel = mkfont(-13,  FW_BOLD);
-    g_fVal   = mkfont(-26,  FW_BOLD);
-    g_fBtn   = mkfont(-16,  FW_BOLD);
+    g_fSpeed = mkfont(-96, FW_BOLD);
+    g_fUnit  = mkfont(-22, FW_BOLD);
+    g_fLabel = mkfont(-14, FW_BOLD);
+    g_fVal   = mkfont(-24, FW_BOLD);
+    g_fBtn   = mkfont(-16, FW_BOLD);
 }
 
 static void fill(HDC dc, int x, int y, int w, int h, COLORREF c)
 {
-    RECT r;
-    HBRUSH b = CreateSolidBrush(c);
-    r.left = x; r.top = y; r.right = x + w; r.bottom = y + h;
-    FillRect(dc, &r, b);
-    DeleteObject(b);
+    RECT r; HBRUSH b = CreateSolidBrush(c);
+    r.left=x; r.top=y; r.right=x+w; r.bottom=y+h;
+    FillRect(dc,&r,b); DeleteObject(b);
 }
 
 static void text_at(HDC dc, int x, int y, const WCHAR *s, COLORREF c, HFONT f)
 {
-    RECT r;
-    HFONT old = (HFONT)SelectObject(dc, f);
-    SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, c);
-    r.left = x; r.top = y;
-    r.right = x + 300; r.bottom = y + 200;
-    DrawTextW(dc, s, -1, &r, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOCLIP);
-    SelectObject(dc, old);
+    RECT r; HFONT old = (HFONT)SelectObject(dc,f);
+    SetBkMode(dc, TRANSPARENT); SetTextColor(dc,c);
+    r.left=x; r.top=y; r.right=x+300; r.bottom=y+200;
+    DrawTextW(dc,s,-1,&r,DT_LEFT|DT_TOP|DT_SINGLELINE|DT_NOCLIP);
+    SelectObject(dc,old);
 }
 
 static int text_w(HDC dc, const WCHAR *s, HFONT f)
 {
-    RECT r;
-    HFONT old = (HFONT)SelectObject(dc, f);
-    SetBkMode(dc, TRANSPARENT);
-    r.left = 0; r.top = 0; r.right = 0; r.bottom = 0;
-    DrawTextW(dc, s, -1, &r,
-              DT_LEFT | DT_TOP | DT_SINGLELINE | DT_CALCRECT | DT_NOCLIP);
-    SelectObject(dc, old);
+    RECT r; HFONT old = (HFONT)SelectObject(dc,f);
+    SetBkMode(dc,TRANSPARENT);
+    r.left=0; r.top=0; r.right=0; r.bottom=0;
+    DrawTextW(dc,s,-1,&r,DT_LEFT|DT_TOP|DT_SINGLELINE|DT_CALCRECT|DT_NOCLIP);
+    SelectObject(dc,old);
     return r.right - r.left;
 }
 
 static void text_center(HDC dc, int cx, int y, const WCHAR *s, COLORREF c, HFONT f)
 {
-    text_at(dc, cx - text_w(dc, s, f) / 2, y, s, c, f);
+    text_at(dc, cx - text_w(dc,s,f)/2, y, s, c, f);
 }
 
-static void round_rect(HDC dc, int x, int y, int w, int h, int rad,
-                       COLORREF fillc, COLORREF linec)
+static void round_rect(HDC dc,int x,int y,int w,int h,int rad,COLORREF fc,COLORREF lc)
 {
-    HBRUSH b  = CreateSolidBrush(fillc);
-    HPEN   p  = CreatePen(PS_SOLID, 1, linec);
-    HBRUSH ob = (HBRUSH)SelectObject(dc, b);
-    HPEN   op = (HPEN)SelectObject(dc, p);
-    RoundRect(dc, x, y, x + w, y + h, rad, rad);
-    SelectObject(dc, ob);
-    SelectObject(dc, op);
-    DeleteObject(b);
-    DeleteObject(p);
+    HBRUSH b=(HBRUSH)CreateSolidBrush(fc); HPEN p=CreatePen(PS_SOLID,1,lc);
+    HBRUSH ob=(HBRUSH)SelectObject(dc,b); HPEN op=(HPEN)SelectObject(dc,p);
+    RoundRect(dc,x,y,x+w,y+h,rad,rad);
+    SelectObject(dc,ob); SelectObject(dc,op);
+    DeleteObject(b); DeleteObject(p);
 }
 
 static void odo_tick(void)
 {
     DWORD now = GetTickCount();
     if (!g_fix) { g_have_last = 0; g_last_tick = now; return; }
-
     if (g_have_last && g_last_tick) {
-        double dt = (double)(now - g_last_tick) / 1000.0;
+        double dt = (double)(now - g_last_tick)/1000.0;
         if (dt > 0.2 && dt < 30.0) {
-            double d = haversine_m(g_last_lat, g_last_lon, g_lat, g_lon);
-            if (d > 0.5 && d < 500.0) g_odo_km += d / 1000.0;
+            double d = dist_m(g_last_lat,g_last_lon,g_lat,g_lon);
+            if (d > 0.5 && d < 500.0) g_odo_km += d/1000.0;
         }
-        g_last_lat = g_lat;
-        g_last_lon = g_lon;
+        g_last_lat = g_lat; g_last_lon = g_lon;
     } else {
-        g_last_lat = g_lat;
-        g_last_lon = g_lon;
-        g_have_last = 1;
+        g_last_lat = g_lat; g_last_lon = g_lon; g_have_last = 1;
     }
     g_last_tick = now;
 }
 
 static void draw_screen(HDC dc, int W, int H)
 {
-    WCHAR buf[64];
+    WCHAR buf[80];
     int gpsOk = g_fix;
     int cx, spY, bw, bh, by, rw, rh, rx, ry;
-    COLORREF cSp;
+    int odo_w, odo_f;
+    int sats_show = gpsOk ? g_sats : g_sats_view;
 
-    fill(dc, 0, 0, W, H, C_BG);
+    fill(dc,0,0,W,H,TBG);
 
     if (g_scanning) {
-        fill(dc, 0, 0, W, 20, C_WARNBG);
-        text_at(dc, 6, 3, L"szukam portu GPS...", C_WARN, g_fLabel);
+        fill(dc,0,0,W,20,TWNBG);
+        text_at(dc,6,3,L"szukam portu GPS...",TWN,g_fLabel);
     } else if (g_probe_result == -1) {
-        fill(dc, 0, 0, W, 20, C_ERRBG);
-        text_at(dc, 6, 3, L"BRAK GPS - zly port lub baud", C_ERR, g_fLabel);
+        fill(dc,0,0,W,20,TERBG);
+        text_at(dc,6,3,L"BRAK GPS - retry 5 s",TER,g_fLabel);
     } else if (gpsOk) {
-        fill(dc, 0, 0, W, 20, C_ACCENT_D);
-        wsprintfW(buf, L"%s %d baud  \xB7  %d sat",
-                  g_used_port, (int)g_used_baud, g_sats);
-        text_at(dc, 6, 3, buf, C_ACCENT, g_fLabel);
+        fill(dc,0,0,W,20,TACD);
+        wsprintfW(buf,L"%s %d baud %d sat",
+                  g_used_port,(int)g_used_baud,g_sats);
+        text_at(dc,6,3,buf,TAC,g_fLabel);
     } else {
-        fill(dc, 0, 0, W, 20, C_WARNBG);
-        wsprintfW(buf, L"%s %d baud - czekam na fix",
-                  g_used_port, (int)g_used_baud);
-        text_at(dc, 6, 3, buf, C_WARN, g_fLabel);
+        fill(dc,0,0,W,20,TWNBG);
+        if (sats_show > 0)
+            wsprintfW(buf,L"%s %d widze %d sat",
+                      g_used_port,(int)g_used_baud,sats_show);
+        else
+            wsprintfW(buf,L"%s %d - czekam na fix",
+                      g_used_port,(int)g_used_baud);
+        text_at(dc,6,3,buf,TWN,g_fLabel);
     }
+    fill(dc,W-28,0,28,20,TERBG);
+    text_center(dc,W-14,2,L"X",TER,g_fBtn);
 
-    if (gpsOk) {
-        int v = (int)(g_speed_kmh + 0.5);
-        if (v < 0) v = 0;
-        if (v > 999) v = 999;
-        wsprintfW(buf, L"%d", v);
-    } else {
-        wcscpy(buf, L"--");
-    }
-    cx  = W / 2;
-    spY = 26;
-    cSp = gpsOk ? C_TEXT : C_DIM;
-    text_center(dc, cx, spY, buf, cSp, g_fSpeed);
-    text_center(dc, cx, spY + 116, L"km/h", C_DIM, g_fUnit);
+    if (gpsOk) wsprintfW(buf,L"%d",g_speed_kmh);
+    else wcscpy(buf,L"--");
+    cx=W/2; spY=26;
+    text_center(dc,cx,spY,buf,gpsOk?TTEXT:TDIM,g_fSpeed);
+    text_center(dc,cx,spY+100,L"km/h",TDIM,g_fUnit);
+    text_center(dc,cx,spY+122,THEME_NAMES[g_theme],TDIM,g_fLabel);
 
-    bw = (W - 18) / 2;
-    bh = 60;
-    by = H - bh - 34;
+    bw=(W-18)/2; bh=58; by=H-bh-34;
+    round_rect(dc,6,by,bw,bh,8,TPANEL,TLINE);
+    text_at(dc,16,by+5,L"LICZNIK",TDIM,g_fLabel);
+    odo_w=(int)g_odo_km;
+    odo_f=(int)((g_odo_km-odo_w)*10.0);
+    if (odo_f<0) odo_f=0; if (odo_f>9) odo_f=9;
+    wsprintfW(buf,L"%d.%d km",odo_w,odo_f);
+    text_at(dc,16,by+21,buf,TAC,g_fVal);
 
-    round_rect(dc, 6, by, bw, bh, 8, C_PANEL, C_LINE);
-    text_at(dc, 16, by + 6, L"LICZNIK", C_DIM, g_fLabel);
-    wsprintfW(buf, L"%.1f km", g_odo_km);
-    text_at(dc, 16, by + 22, buf, C_ACCENT, g_fVal);
+    round_rect(dc,12+bw,by,bw,bh,8,TPANEL,TLINE);
+    text_at(dc,22+bw,by+5,L"WYSOKOSC",TDIM,g_fLabel);
+    if (gpsOk) wsprintfW(buf,L"%d m",g_alt_m);
+    else wcscpy(buf,L"-- m");
+    text_at(dc,22+bw,by+21,buf,gpsOk?TTEXT:TDIM,g_fVal);
 
-    round_rect(dc, 12 + bw, by, bw, bh, 8, C_PANEL, C_LINE);
-    text_at(dc, 22 + bw, by + 6, L"WYSOKOSC", C_DIM, g_fLabel);
-    if (gpsOk) wsprintfW(buf, L"%.0f m", g_alt_m);
-    else       wcscpy(buf, L"-- m");
-    text_at(dc, 22 + bw, by + 22, buf, gpsOk ? C_TEXT : C_DIM, g_fVal);
-
-    rw = 100; rh = 24;
-    rx = W - rw - 6;
-    ry = H - rh - 6;
-    round_rect(dc, rx, ry, rw, rh, 6, C_BTN, C_BTNLINE);
-    text_center(dc, rx + rw / 2, ry + 4, L"RESET", C_ERR, g_fBtn);
+    rw=100; rh=24; rx=W-rw-6; ry=H-rh-6;
+    round_rect(dc,rx,ry,rw,rh,6,TBTN,TBTNL);
+    text_center(dc,rx+rw/2,ry+4,L"RESET",TER,g_fBtn);
 }
 
-/* ─────────── Okno ─────────── */
+/* ============ OKNO ============ */
+static HWND g_hwnd;
+
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
     case WM_CREATE:
         make_fonts();
+        logf_("WM_CREATE: okno gotowe\n");
         return 0;
-
     case WM_PAINT: {
-        PAINTSTRUCT ps;
-        HDC dc;
-        RECT r;
-        dc = BeginPaint(hwnd, &ps);
-        GetClientRect(hwnd, &r);
-        draw_screen(dc, r.right, r.bottom);
-        EndPaint(hwnd, &ps);
+        PAINTSTRUCT ps; HDC dc; RECT r;
+        dc = BeginPaint(hwnd,&ps);
+        GetClientRect(hwnd,&r);
+        draw_screen(dc,r.right,r.bottom);
+        EndPaint(hwnd,&ps);
         return 0;
     }
-
     case WM_LBUTTONDOWN: {
-        int x = LOWORD(lp), y = HIWORD(lp);
-        RECT r;
-        int rw = 100, rh = 24, rx, ry;
-        GetClientRect(hwnd, &r);
-        rx = r.right - rw - 6;
-        ry = r.bottom - rh - 6;
-        if (x >= rx && x <= rx + rw && y >= ry && y <= ry + rh) {
-            g_odo_km = 0.0;
-            g_have_last = 0;
+        int x=LOWORD(lp), y=HIWORD(lp);
+        RECT r; int rw=100,rh=24,rx,ry;
+        GetClientRect(hwnd,&r);
+        if (x >= r.right-28 && y < 20) {
+            logf_("X: zamykam\n");
+            g_running = 0;
             odo_save();
-            logf_("odometer reset by user\n");
-            InvalidateRect(hwnd, NULL, FALSE);
+            if (g_log) fclose(g_log);
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        if (y < 20 && x < r.right-30) {
+            g_theme = (g_theme+1)%3;
+            theme_save();
+            logf_("motyw -> %d\n", g_theme);
+            InvalidateRect(hwnd,NULL,FALSE);
+            return 0;
+        }
+        rx=r.right-rw-6; ry=r.bottom-rh-6;
+        if (x>=rx && x<=rx+rw && y>=ry && y<=ry+rh) {
+            g_odo_km=0.0; g_have_last=0;
+            odo_save();
+            logf_("licznik RESET\n");
+            InvalidateRect(hwnd,NULL,FALSE);
         }
         return 0;
     }
-
-    case WM_TIMER:
+    case WM_TIMER: {
+        static int tick = 0;
         odo_tick();
-        InvalidateRect(hwnd, NULL, FALSE);
+        tick++;
+        if ((tick % 120) == 0) {
+            int ow=(int)g_odo_km, of=(int)((g_odo_km-ow)*10.0;
+            if (of<0)of=0; if(of>9)of=9;
+            odo_save();
+            logf_("HB 60s: fix=%d sats=%d/%d spd=%d odo=%d.%d alt=%d rx=%d nmea=%d\n",
+                  g_fix,g_sats,g_sats_view,g_speed_kmh,ow,of,g_alt_m,
+                  (int)g_total_bytes,(int)g_nmea_count);
+        }
+        InvalidateRect(hwnd,NULL,FALSE);
         return 0;
-
+    }
     case WM_CLOSE:
+        logf_("WM_CLOSE\n");
         g_running = 0;
         odo_save();
+        if (g_log) { fprintf(g_log,"=== exit ===\n"); fclose(g_log); g_log=NULL; }
         DestroyWindow(hwnd);
         return 0;
-
     case WM_DESTROY:
         PostQuitMessage(0);
         return 0;
     }
-    return DefWindowProcW(hwnd, msg, wp, lp);
+    return DefWindowProcW(hwnd,msg,wp,lp);
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR cmd, int show)
 {
-    WNDCLASSW wc;
-    MSG msg;
-    HWND hwnd;
-    int W, H;
-
+    WNDCLASSW wc; MSG msg; HWND hwnd; int W,H;
     (void)hPrev; (void)cmd; (void)show;
 
     W = GetSystemMetrics(SM_CXSCREEN);
     H = GetSystemMetrics(SM_CYSCREEN);
 
     log_open();
-    logf_("=== start, screen %dx%d ===\n", W, H);
+    logf_("=== start %dx%d ===\n", W, H);
 
-    memset(&wc, 0, sizeof(wc));
-    wc.lpfnWndProc   = WndProc;
-    wc.hInstance     = hInst;
-    wc.hCursor       = NULL;
+    gps_power_on();
+
+    theme_load();
+    logf_("motyw=%d\n", g_theme);
+
+    memset(&wc,0,sizeof(wc));
+    wc.lpfnWndProc = WndProc;
+    wc.hInstance = hInst;
     wc.lpszClassName = L"LarkHUD";
     wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     if (!RegisterClassW(&wc)) {
-        logf_("RegisterClass FAILED\n");
+        logf_("RegisterClass FAIL\n");
+        MessageBoxW(NULL,L"RegisterClass fail",L"LarkHUD",MB_OK);
         return 1;
     }
 
-    hwnd = CreateWindowExW(0, L"LarkHUD", L"Lark HUD",
-                           WS_POPUP | WS_VISIBLE, 0, 0, W, H,
-                           NULL, NULL, hInst, NULL);
+    hwnd = CreateWindowExW(0,L"LarkHUD",L"Lark HUD",
+                           WS_POPUP|WS_VISIBLE,0,0,W,H,
+                           NULL,NULL,hInst,NULL);
     if (!hwnd) {
-        logf_("CreateWindow FAILED\n");
+        logf_("CreateWindow FAIL\n");
+        MessageBoxW(NULL,L"CreateWindow fail",L"LarkHUD",MB_OK);
         return 1;
     }
+    g_hwnd = hwnd;
 
     odo_load();
-    logf_("odo loaded: %.3f km\n", g_odo_km);
+    {
+        int ow=(int)g_odo_km, of=(int)((g_odo_km-ow)*10.0);
+        if(of<0)of=0; if(of>9)of=9;
+        logf_("odo=%d.%d km\n",ow,of);
+    }
 
-    CreateThread(NULL, 0, gps_thread, NULL, 0, NULL);
-    SetTimer(hwnd, 1, 500, NULL);
+    CreateThread(NULL,0,gps_thread,NULL,0,NULL);
+    SetTimer(hwnd,1,500,NULL);
 
-    while (GetMessageW(&msg, NULL, 0, 0)) {
+    while (GetMessageW(&msg,NULL,0,0)) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
-
+    logf_("WinMain exit\n");
     g_running = 0;
     if (g_hGps != INVALID_HANDLE_VALUE) CloseHandle(g_hGps);
     odo_save();
-    logf_("=== exit ===\n");
     if (g_log) fclose(g_log);
     return 0;
 }
