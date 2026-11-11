@@ -40,10 +40,11 @@ typedef struct {
 } Theme;
 
 static const Theme THEMES[3] = {
-    { RGB(10,15,13), RGB(19,26,23), RGB(36,49,43), RGB(232,240,236),
-      RGB(125,145,138), RGB(74,222,128), RGB(28,58,42),
-      RGB(251,191,36), RGB(42,34,12), RGB(248,113,113), RGB(42,26,26),
-      RGB(60,32,32), RGB(120,60,60) },
+    /* 0 CZERWONY (default) - ciemne tlo, czerwony akcent, jasne cyfry */
+    { RGB(12,10,11), RGB(24,18,20), RGB(52,32,36), RGB(245,235,236),
+      RGB(155,125,130), RGB(255,64,64), RGB(70,16,18),
+      RGB(255,196,64), RGB(46,34,8), RGB(255,120,120), RGB(56,14,14),
+      RGB(58,26,28), RGB(112,44,48) },
     { RGB(12,10,6), RGB(24,19,10), RGB(52,40,16), RGB(255,243,220),
       RGB(160,140,110), RGB(251,191,36), RGB(66,48,10),
       RGB(125,211,252), RGB(20,32,44), RGB(248,113,113), RGB(42,26,26),
@@ -53,7 +54,7 @@ static const Theme THEMES[3] = {
       RGB(251,191,36), RGB(42,34,12), RGB(248,113,113), RGB(42,26,26),
       RGB(60,32,32), RGB(120,60,60) },
 };
-static const WCHAR *THEME_NAMES[3] = { L"ZIELONY", L"AMBER", L"NIEBIESKI" };
+static const WCHAR *THEME_NAMES[3] = { L"CZERWONY", L"AMBER", L"NIEBIESKI" };
 static int g_theme = 0;
 #define TBG     (THEMES[g_theme].bg)
 #define TPANEL  (THEMES[g_theme].panel)
