@@ -184,6 +184,7 @@ static const WCHAR *g_font_candidates[] = {
     L"Arial"
 };
 static int g_font_pick = -1;
+static int font_works(const WCHAR *face, int size, int idx);
 #define FONT_COUNT ((int)(sizeof(g_font_candidates)/sizeof(g_font_candidates[0])))
 
 static void font_load(void)
