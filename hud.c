@@ -995,7 +995,7 @@ static HFONT mkfont_face(const WCHAR *face, int size, int weight)
     lf.lfWeight = weight;
     lf.lfCharSet = DEFAULT_CHARSET;
     lf.lfQuality = NONANTIALIASED_QUALITY;   /* zero wygladzania = ostry pixel */
-    lf.lfPitchAndFamily = FIXED_PITCH | FF_MODERN;
+    lf.lfPitchAndFamily = DEFAULT_PITCH | FF_DONTCARE; /* nie wymuszaj FIXED - proporcjonalne TTF (Minecraft/Tahoma/Arial) inaczej ladowalyby jako ten sam fallback */
     wcsncpy(lf.lfFaceName, face, 31);
     lf.lfFaceName[31] = 0;
     return CreateFontIndirectW(&lf);
@@ -1007,7 +1007,9 @@ static int g_font_ok[8];
 
 static int font_works(const WCHAR *face, int size, int idx)
 {
-    if (idx >= 0 && idx < 8 && g_font_tested[idx]) return g_font_ok[idx];
+    /* idx 0 = Minecraft: nie cachuj, bo dostepnosc zmienia sie
+     * po AddFontResourceW (plik moze pojawic sie / zniknac). */
+    if (idx != 0 && idx >= 0 && idx < 8 && g_font_tested[idx]) return g_font_ok[idx];
     HFONT f = mkfont_face(face, size, FW_BOLD);
     HDC dc; HFONT old; TEXTMETRICW tm; int ok = 0;
     if (!f) return 0;
@@ -1025,7 +1027,7 @@ static int font_works(const WCHAR *face, int size, int idx)
         ReleaseDC(NULL, dc);
     }
     DeleteObject(f);
-    if (idx >= 0 && idx < 8) { g_font_tested[idx] = 1; g_font_ok[idx] = ok; }
+    if (idx != 0 && idx >= 0 && idx < 8) { g_font_tested[idx] = 1; g_font_ok[idx] = ok; }
     return ok;
 }
 
