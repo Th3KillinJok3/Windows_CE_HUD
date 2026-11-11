@@ -95,6 +95,7 @@ static volatile int    g_sats;       /* uzyte (GGA) */
 static volatile int    g_sats_view;  /* widoczne (GSV) */
 static volatile int    g_speed_kmh;
 static volatile int    g_alt_m;
+static volatile int    g_alt_ok;   /* GGA kiedykolwiek podalo wysokosc */
 static volatile double g_lat, g_lon;
 
 static HANDLE       g_hGps = INVALID_HANDLE_VALUE;
@@ -260,8 +261,11 @@ static void parse_gga(char **f, int n)
     if (n < 10) return;
     g_sats = atoi(f[7]);
     if (atoi(f[6]) > 0) {
-        g_alt_m = atoi(f[9]);
         g_fix = 1;
+        if (f[9] && f[9][0]) {
+            g_alt_m = atoi(f[9]);
+            g_alt_ok = 1;
+        }
     } else {
         g_fix = 0;
     }
@@ -288,6 +292,9 @@ static void nmea_line(char *line)
     g_nmea_count++;
     if (!strcmp(type,"RMC")) parse_rmc(f,n);
     else if (!strcmp(type,"GGA")) parse_gga(f,n);
+    else if (!strcmp(type,"GNS")) {
+        if (n >= 10 && f[9] && f[9][0]) { g_alt_m = atoi(f[9]); g_alt_ok = 1; }
+    }
     else if (!strcmp(type,"GSV")) parse_gsv(f,n);
 }
 
@@ -828,7 +835,8 @@ static void draw_screen(HDC dc, int W, int H)
 
     round_rect(dc,12+bw,by,bw,bh,8,TPANEL,TLINE);
     text_at(dc,22+bw,by+5,L"WYSOKOSC",TDIM,g_fLabel);
-    if (gpsOk) wsprintfW(buf,L"%d m",g_alt_m);
+    if (gpsOk && g_alt_ok) wsprintfW(buf,L"%d m",g_alt_m);
+    else if (gpsOk) wcscpy(buf,L"--- m");
     else wcscpy(buf,L"-- m");
     text_at(dc,22+bw,by+21,buf,gpsOk?TTEXT:TDIM,g_fVal);
 
@@ -891,8 +899,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             int ow=(int)g_odo_km, of=(int)((g_odo_km-ow)*10.0);
             if (of<0)of=0; if(of>9)of=9;
             odo_save();
-            logf_("HB 60s: fix=%d sats=%d/%d spd=%d odo=%d.%d alt=%d rx=%d nmea=%d\n",
-                  g_fix,g_sats,g_sats_view,g_speed_kmh,ow,of,g_alt_m,
+            logf_("HB 60s: fix=%d sats=%d/%d spd=%d odo=%d.%d alt=%d altok=%d rx=%d nmea=%d\n",
+                  g_fix,g_sats,g_sats_view,g_speed_kmh,ow,of,g_alt_m,g_alt_ok,
                   (int)g_total_bytes,(int)g_nmea_count);
         }
         InvalidateRect(hwnd,NULL,FALSE);
