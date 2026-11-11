@@ -98,6 +98,12 @@ static volatile int    g_sats_view;  /* widoczne (GSV) */
 static volatile int    g_speed_kmh;
 static volatile int    g_alt_m;
 static volatile int    g_alt_ok;   /* GGA kiedykolwiek podalo wysokosc */
+static volatile int    g_hdop10;   /* HDOP * 10, 9999 = brak */
+static volatile int    g_course;   /* azymut 0-359 stopni */
+static volatile int    g_course_ok;
+static volatile int    g_speed_max; /* maks predkosc w sesji */
+static volatile int    g_batt_pct;  /* -1 = nieznane */
+static volatile int    g_batt_ac;   /* 1 = na ladowaniu */
 static volatile double g_lat, g_lon;
 
 static HANDLE       g_hGps = INVALID_HANDLE_VALUE;
@@ -297,6 +303,13 @@ static void parse_rmc(char **f, int n)
     g_speed_kmh = (int)(knots * 1.852 + 0.5);
     if (g_speed_kmh < 0) g_speed_kmh = 0;
     if (g_speed_kmh > 999) g_speed_kmh = 999;
+    if (g_speed_kmh > g_speed_max) g_speed_max = g_speed_kmh;
+    if (n > 8 && f[8] && f[8][0]) {
+        int c = atoi(f[8]);
+        if (c < 0) c = 0;
+        g_course = c % 360;
+        g_course_ok = 1;
+    }
     if (f[3][0] && f[5][0]) {
         double rawlat = atof(f[3]);
         double rawlon = atof(f[5]);
@@ -314,6 +327,20 @@ static void parse_gga(char **f, int n)
 {
     if (n < 10) return;
     g_sats = atoi(f[7]);
+    if (f[8] && f[8][0]) {
+        /* HDOP w formacie "0.9" -> 9 */
+        int w = atoi(f[8]);
+        int d = 0;
+        const char *q = f[8];
+        while (*q && *q != '.') q++;
+        if (*q == '.') {
+            if (q[1] >= '0' && q[1] <= '9') d = q[1] - '0';
+        }
+        g_hdop10 = w * 10 + d;
+        if (g_hdop10 > 999) g_hdop10 = 999;
+    } else {
+        g_hdop10 = 9999;
+    }
     if (atoi(f[6]) > 0) {
         g_fix = 1;
         if (f[9] && f[9][0]) {
@@ -757,6 +784,60 @@ static DWORD WINAPI gps_thread(LPVOID param)
     return 0;
 }
 
+/* ============ BATERIA ============ */
+#ifndef AC_LINE_ONLINE
+#define AC_LINE_ONLINE 0x01
+#endif
+#ifndef BATTERY_FLAG_CHARGING
+#define BATTERY_FLAG_CHARGING 0x08
+#endif
+
+typedef struct {
+    BYTE  ACLineStatus;
+    BYTE  BatteryFlag;
+    BYTE  BatteryLifePercent;
+    BYTE  Reserved1;
+    DWORD BatteryLifeTime;
+    DWORD BatteryFullLifeTime;
+} MY_POWER;
+
+static void batt_read(void)
+{
+    HINSTANCE hC = LoadLibraryW(L"coredll.dll");
+    int got = 0;
+    if (hC) {
+        typedef BOOL (WINAPI *PFN1)(MY_POWER *, DWORD, DWORD *);
+        typedef BOOL (WINAPI *PFN0)(SYSTEM_POWER_STATUS_EX *, BOOL);
+        PFN1 f2 = (PFN1)GetProcAddress(hC, L"GetSystemPowerStatusEx2");
+        PFN0 f1 = (PFN0)GetProcAddress(hC, L"GetSystemPowerStatusEx");
+        if (f2) {
+            MY_POWER ps; DWORD sz = sizeof(ps);
+            memset(&ps, 0, sizeof(ps));
+            if (f2(&ps, sizeof(ps), &sz)) {
+                if (ps.BatteryLifePercent != 255) g_batt_pct = (int)ps.BatteryLifePercent;
+                else g_batt_pct = -1;
+                g_batt_ac = (ps.ACLineStatus == AC_LINE_ONLINE ||
+                             (ps.BatteryFlag & BATTERY_FLAG_CHARGING)) ? 1 : 0;
+                got = 1;
+            }
+        }
+        if (!got && f1) {
+            SYSTEM_POWER_STATUS_EX ps; DWORD sz = 0;
+            memset(&ps, 0, sizeof(ps));
+            if (f1(&ps, TRUE)) {
+                if (ps.BatteryLifePercent != 255) g_batt_pct = (int)ps.BatteryLifePercent;
+                else g_batt_pct = -1;
+                g_batt_ac = (ps.ACLineStatus == AC_LINE_ONLINE ||
+                             (ps.BatteryFlag & BATTERY_FLAG_CHARGING)) ? 1 : 0;
+                (void)sz;
+                got = 1;
+            }
+        }
+        FreeLibrary(hC);
+    }
+    if (!got && g_batt_pct == 0) g_batt_pct = -1;
+}
+
 /* ============ RYSOWANIE ============ */
 /* Fonty w kolejnosci preferencji: pixelowe/retro najpierw.
  * Wybieramy pierwszy, ktory system faktycznie ma. */
@@ -920,6 +1001,39 @@ static void draw_screen(HDC dc, int W, int H)
                       g_used_port,(int)g_used_baud);
         text_at(dc,6,3,buf,TWN,g_fLabel);
     }
+    /* --- prawa strona paska: bateria + sygnal --- */
+    {
+        int bx = W - 32;
+        /* bateria: ikona + % */
+        if (g_batt_pct >= 0) {
+            WCHAR bw2[16];
+            COLORREF bc = g_batt_ac ? TAC : (g_batt_pct < 20 ? TER : TTEXT);
+            int iw = 26, ih = 11;
+            round_rect(dc, bx - 34, 5, iw, ih, 2, TPANEL, bc);
+            fill(dc, bx - 34 + 2, 7, (iw - 4) * g_batt_pct / 100, ih - 4, bc);
+            fill(dc, bx - 8, 8, 2, 5, bc);
+            wsprintfW(bw2, L"%d", g_batt_pct);
+            text_at(dc, bx - 34 + iw + 4, 3, bw2, bc, g_fLabel);
+        }
+        /* sygnal: paski z HDOP (im mniej tym lepiej) */
+        {
+            int bars = 0, i;
+            COLORREF sc;
+            if (gpsOk && g_hdop10 != 9999) {
+                if (g_hdop10 <= 10)       bars = 4;
+                else if (g_hdop10 <= 20)  bars = 3;
+                else if (g_hdop10 <= 40)  bars = 2;
+                else if (g_hdop10 <= 80)  bars = 1;
+                else                      bars = 0;
+            }
+            sc = (bars >= 3) ? TAC : (bars >= 1 ? TWN : TER);
+            for (i = 0; i < 4; i++) {
+                int bh2 = 4 + i * 3;
+                int by2 = 17 - bh2;
+                fill(dc, bx - 42 + i * 6, by2, 4, bh2, (i < bars) ? sc : TPANEL);
+            }
+        }
+    }
     fill(dc,W-28,0,28,20,TERBG);
     text_center(dc,W-14,2,L"X",TER,g_fBtn);
 
@@ -941,7 +1055,20 @@ static void draw_screen(HDC dc, int W, int H)
         text_at(dc, x0, spY, buf, gpsOk?TTEXT:TDIM, g_fSpeed);
         text_at(dc, x0 + wnum + gap, yUnit, unit, TDIM, g_fUnit);
     }
-    text_center(dc,cx,spY+118,THEME_NAMES[g_theme],TDIM,g_fLabel);
+    {
+        /* kompas + predkosc max w jednej linii pod motywem */
+        static const WCHAR *DIRS[8] = { L"N",L"NE",L"E",L"SE",L"S",L"SW",L"W",L"NW" };
+        WCHAR cb[40];
+        int cdx = (g_course + 22) / 45;
+        if (cdx > 7) cdx = 0;
+        if (gpsOk && g_course_ok)
+            wsprintfW(cb, L"%s %d\xb0", DIRS[cdx], g_course);
+        else
+            wcscpy(cb, L"--");
+        text_center(dc, W/2 - 70, spY+118, cb, gpsOk?TAC:TDIM, g_fLabel);
+        wsprintfW(cb, L"max %d", g_speed_max);
+        text_center(dc, W/2 + 70, spY+118, cb, TDIM, g_fLabel);
+    }
 
     bw=(W-18)/2; bh=58; by=H-bh-34;
     round_rect(dc,6,by,bw,bh,8,TPANEL,TLINE);
@@ -1019,9 +1146,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         /* trzy guziki: RESET (dol), WYGLAD (srodek), FONT (gora) */
         rw=100; rh=22; rx=r.right-rw-6; ry=r.bottom-rh-6;
         if (x>=rx && x<=rx+rw && y>=ry && y<=ry+rh) {
-            g_odo_km=0.0; g_have_last=0;
+            g_odo_km=0.0; g_have_last=0; g_speed_max=0;
             odo_save();
-            logf_("licznik RESET\n");
+            logf_("licznik RESET (max=0)\n");
             InvalidateRect(hwnd,NULL,FALSE);
             return 0;
         }
@@ -1049,12 +1176,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         static int tick = 0;
         odo_tick();
         tick++;
+        if ((tick % 20) == 0) batt_read();
         if ((tick % 120) == 0) {
             int ow=(int)g_odo_km, of=(int)((g_odo_km-ow)*10.0);
             if (of<0)of=0; if(of>9)of=9;
             odo_save();
-            logf_("HB 60s: fix=%d sats=%d/%d spd=%d odo=%d.%d alt=%d altok=%d rx=%d nmea=%d\n",
-                  g_fix,g_sats,g_sats_view,g_speed_kmh,ow,of,g_alt_m,g_alt_ok,
+            logf_("HB 60s: fix=%d sats=%d/%d spd=%d max=%d crs=%d hdop=%d bat=%d ac=%d odo=%d.%d alt=%d altok=%d rx=%d nmea=%d\n",
+                  g_fix,g_sats,g_sats_view,g_speed_kmh,g_speed_max,g_course,g_hdop10,
+                  g_batt_pct,g_batt_ac,ow,of,g_alt_m,g_alt_ok,
                   (int)g_total_bytes,(int)g_nmea_count);
         }
         InvalidateRect(hwnd,NULL,FALSE);
