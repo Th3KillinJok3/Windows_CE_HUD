@@ -355,16 +355,19 @@ static void wakeup_for_baud(HANDLE h, DWORD baud)
 }
 
 /* ============ PORT ============ */
-static HANDLE open_port(const WCHAR *port, DWORD baud)
+static HANDLE open_port(const WCHAR *port, DWORD baud, int do_wakeup)
 {
     HANDLE h;
     DCB dcb;
     COMMTIMEOUTS to;
     char name[32];
+    DWORD errs = 0;
+    COMSTAT st;
 
     w2a(port, name, sizeof(name));
-    h = CreateFileW(port, GENERIC_READ | GENERIC_WRITE,
-                    0, NULL, OPEN_EXISTING, 0, NULL);
+    h = CreateFileW(port, GENERIC_READ,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    NULL, OPEN_EXISTING, 0, NULL);
     if (h == INVALID_HANDLE_VALUE) {
         logf_("OPEN %s @%d -> FAIL err=%d\n", name, (int)baud, (int)GetLastError());
         return INVALID_HANDLE_VALUE;
@@ -378,24 +381,64 @@ static HANDLE open_port(const WCHAR *port, DWORD baud)
         dcb.ByteSize = 8;
         dcb.Parity   = NOPARITY;
         dcb.StopBits = ONESTOPBIT;
-        dcb.fDtrControl = DTR_CONTROL_ENABLE;
-        dcb.fRtsControl = RTS_CONTROL_ENABLE;
         if (!SetCommState(h,&dcb))
             logf_("  SetCommState FAIL err=%d\n",(int)GetLastError());
     } else {
         logf_("  GetCommState FAIL err=%d\n",(int)GetLastError());
     }
-    to.ReadIntervalTimeout = 50;
+    to.ReadIntervalTimeout = 20;
     to.ReadTotalTimeoutMultiplier = 0;
-    to.ReadTotalTimeoutConstant = 200;
+    to.ReadTotalTimeoutConstant = 100;
     to.WriteTotalTimeoutMultiplier = 0;
     to.WriteTotalTimeoutConstant = 0;
     SetCommTimeouts(h,&to);
     PurgeComm(h, PURGE_RXCLEAR | PURGE_TXCLEAR);
 
-    wakeup_for_baud(h, baud);
-    Sleep(400);
+    if (do_wakeup) {
+        wakeup_for_baud(h, baud);
+        Sleep(400);
+    }
+    memset(&st, 0, sizeof(st));
+    if (ClearCommError(h, &errs, &st))
+        logf_("  COMSTAT in=%d out=%d errs=%d\n", (int)st.cbInQue, (int)st.cbOutQue, (int)errs);
+    else
+        logf_("  ClearCommError FAIL err=%d\n", (int)GetLastError());
     return h;
+}
+
+
+/* ============ DIAGNOSTYKA: porty COM w rejestrze ============ */
+static void log_com_registry(void)
+{
+    static const WCHAR *keys[] = {
+        L"Drivers\\BuiltIn\\Serial",
+        L"Drivers\\BuiltIn\\Serial2",
+        L"Drivers\\BuiltIn\\GPS",
+        L"Drivers\\BuiltIn\\GPSID",
+        L"Drivers\\BuiltIn\\SerialGPS"
+    };
+    int k;
+    logf_("--- rejestr COM ---\n");
+    for (k = 0; k < (int)(sizeof(keys)/sizeof(keys[0])); k++) {
+        HKEY hk;
+        WCHAR name[64], prefix[32];
+        DWORD idx = 0, type, sz;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, keys[k], 0, 0, &hk) != ERROR_SUCCESS) {
+            logf_("  %S: brak\n", keys[k]);
+            continue;
+        }
+        sz = sizeof(prefix); prefix[0] = 0;
+        if (RegQueryValueExW(hk, L"Prefix", NULL, &type, (BYTE*)prefix, &sz) == ERROR_SUCCESS) {
+            sz = sizeof(idx);
+            RegQueryValueExW(hk, L"Index", NULL, &type, (BYTE*)&idx, &sz);
+            wsprintfW(name, L"%s%d:", prefix, (int)idx);
+            logf_("  %S -> %S\n", keys[k], name);
+        } else {
+            logf_("  %S: jest, brak Prefix\n", keys[k]);
+        }
+        RegCloseKey(hk);
+    }
+    logf_("--- koniec rejestru ---\n");
 }
 
 /* ============ WATEK GPS ============ */
@@ -406,6 +449,8 @@ static DWORD WINAPI gps_thread(LPVOID param)
     (void)param;
     logf_("gps_thread start\n");
 
+    log_com_registry();
+
     while (g_running) {
         int ok = 0, pi, bi;
 
@@ -413,7 +458,7 @@ static DWORD WINAPI gps_thread(LPVOID param)
         g_probe_result = 0;
 
         if (FIXED_PORT[0]) {
-            HANDLE h = open_port(FIXED_PORT, FIXED_BAUD ? FIXED_BAUD : CBR_4800);
+            HANDLE h = open_port(FIXED_PORT, FIXED_BAUD ? FIXED_BAUD : CBR_4800, 0);
             if (h != INVALID_HANDLE_VALUE) {
                 wcscpy(g_used_port, FIXED_PORT);
                 g_used_baud = FIXED_BAUD ? FIXED_BAUD : CBR_4800;
@@ -429,10 +474,12 @@ static DWORD WINAPI gps_thread(LPVOID param)
                 DWORD deadline, total = 0, i, got;
                 int shown = 0;
 
-                h = open_port(g_ports[pi], g_bauds[bi]);
+                h = open_port(g_ports[pi], g_bauds[bi], 0);
                 if (h == INVALID_HANDLE_VALUE) continue;
 
-                deadline = GetTickCount() + 4000;
+                /* FAZA A: nasluch 1.5 s BEZ wysylania czegokolwiek */
+                rxn = 0;
+                deadline = GetTickCount() + 1500;
                 while (GetTickCount() < deadline && g_running && !saw) {
                     got = 0;
                     if (!ReadFile(h, buf, sizeof(buf), &got, NULL) || got == 0)
@@ -442,16 +489,9 @@ static DWORD WINAPI gps_thread(LPVOID param)
                     g_last_rx_tick = GetTickCount();
                     {
                         DWORD k;
-                        for (k = 0; k + 1 < got; k++) {
-                            if ((unsigned char)buf[k] == 0xA0 &&
-                                (unsigned char)buf[k+1] == 0xA2) {
-                                if (!sawbin) {
-                                    logf_("  SiRF BINARY wykryty! powtarzam wakeup\n");
-                                    wakeup_for_baud(h, g_bauds[bi]);
-                                }
+                        for (k = 0; k + 1 < got; k++)
+                            if ((unsigned char)buf[k]==0xA0 && (unsigned char)buf[k+1]==0xA2)
                                 sawbin = 1;
-                            }
-                        }
                     }
                     if (!shown && g_log) {
                         int k, lim = got < 48 ? (int)got : 48;
@@ -470,13 +510,53 @@ static DWORD WINAPI gps_thread(LPVOID param)
                         if (c == '\n' || c == '\r') {
                             if (rxn > 6 && rx[0] == '$') { saw = 1; break; }
                             rxn = 0;
-                        } else if (c == '$') {
-                            rxn = 0; rx[rxn++] = c;
-                        } else if (rxn < (int)sizeof(rx)-2) {
-                            rx[rxn++] = c;
-                        } else rxn = 0;
+                        } else if (c == '$') { rxn = 0; rx[rxn++] = c; }
+                        else if (rxn < (int)sizeof(rx)-2) rx[rxn++] = c;
+                        else rxn = 0;
                     }
                 }
+
+                /* FAZA B: cisza -> wyslij wakeup i nasluchuj jeszcze 2.5 s */
+                if (!saw && !sawbin) {
+                    wakeup_for_baud(h, g_bauds[bi]);
+                    deadline = GetTickCount() + 2500;
+                    while (GetTickCount() < deadline && g_running && !saw) {
+                        got = 0;
+                        if (!ReadFile(h, buf, sizeof(buf), &got, NULL) || got == 0)
+                            continue;
+                        total += got;
+                        g_total_bytes += got;
+                        g_last_rx_tick = GetTickCount();
+                        {
+                            DWORD k;
+                            for (k = 0; k + 1 < got; k++)
+                                if ((unsigned char)buf[k]==0xA0 && (unsigned char)buf[k+1]==0xA2)
+                                    sawbin = 1;
+                        }
+                        if (!shown && g_log) {
+                            int k, lim = got < 48 ? (int)got : 48;
+                            logf_("  RX-POST[%d]: ", (int)got);
+                            for (k = 0; k < lim; k++) {
+                                unsigned char c = (unsigned char)buf[k];
+                                if (c >= 32 && c < 127) fputc(c, g_log);
+                                else fprintf(g_log, "\\x%02X", c);
+                            }
+                            fprintf(g_log, "\n");
+                            fflush(g_log);
+                            shown = 1;
+                        }
+                        for (i = 0; i < got; i++) {
+                            char c = buf[i];
+                            if (c == '\n' || c == '\r') {
+                                if (rxn > 6 && rx[0] == '$') { saw = 1; break; }
+                                rxn = 0;
+                            } else if (c == '$') { rxn = 0; rx[rxn++] = c; }
+                            else if (rxn < (int)sizeof(rx)-2) rx[rxn++] = c;
+                            else rxn = 0;
+                        }
+                    }
+                }
+
                 logf_("  total %d bytes nmea=%s bin=%s\n",
                       (int)total, saw ? "YES" : "no", sawbin ? "YES" : "no");
                 if (saw || sawbin) {
@@ -487,7 +567,7 @@ static DWORD WINAPI gps_thread(LPVOID param)
                     g_scanning = 0; g_probe_result = 1; ok = 1;
                     w2a(g_ports[pi], pn, sizeof(pn));
                     logf_("FOUND %s @%d%s\n", pn, (int)g_bauds[bi],
-                          sawbin && !saw ? " (binary, budze...)" : "");
+                          sawbin && !saw ? " (binary)" : "");
                 } else CloseHandle(h);
             }
         }
