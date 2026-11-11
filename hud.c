@@ -1056,7 +1056,7 @@ static void draw_screen(HDC dc, int W, int H)
         text_at(dc, x0 + wnum + gap, yUnit, unit, TDIM, g_fUnit);
     }
     {
-        /* kompas + predkosc max w jednej linii pod motywem */
+        /* kompas (lewo) + predkosc max (prawo) w jednej linii */
         static const WCHAR *DIRS[8] = { L"N",L"NE",L"E",L"SE",L"S",L"SW",L"W",L"NW" };
         WCHAR cb[40];
         int cdx = (g_course + 22) / 45;
@@ -1134,13 +1134,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             odo_save();
             if (g_log) fclose(g_log);
             DestroyWindow(hwnd);
-            return 0;
-        }
-        if (y < 20 && x < r.right-30) {
-            g_theme = (g_theme+1)%3;
-            theme_save();
-            logf_("motyw -> %d\n", g_theme);
-            InvalidateRect(hwnd,NULL,FALSE);
             return 0;
         }
         /* trzy guziki: RESET (dol), WYGLAD (srodek), FONT (gora) */
