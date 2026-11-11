@@ -704,17 +704,65 @@ static DWORD WINAPI gps_thread(LPVOID param)
 }
 
 /* ============ RYSOWANIE ============ */
-static HFONT mkfont(int size, int weight)
+/* Fonty w kolejnosci preferencji: pixelowe/retro najpierw.
+ * Wybieramy pierwszy, ktory system faktycznie ma. */
+static const WCHAR *g_font_candidates[] = {
+    L"Terminal",        /* pixelowy bitmapowy, jest w kazdym WinCE */
+    L"Fixedsys",
+    L"MS Sans Serif",
+    L"Tahoma",
+    L"Courier New",
+    L"Arial"
+};
+static int g_font_pick = -1;
+
+static HFONT mkfont_face(const WCHAR *face, int size, int weight)
 {
     LOGFONTW lf;
     memset(&lf, 0, sizeof(lf));
     lf.lfHeight = size;
     lf.lfWeight = weight;
     lf.lfCharSet = DEFAULT_CHARSET;
-    lf.lfQuality = NONANTIALIASED_QUALITY;
+    lf.lfQuality = NONANTIALIASED_QUALITY;   /* zero wygladzania = ostry pixel */
     lf.lfPitchAndFamily = FIXED_PITCH | FF_MODERN;
-    wcscpy(lf.lfFaceName, L"Courier New");
+    wcsncpy(lf.lfFaceName, face, 31);
+    lf.lfFaceName[31] = 0;
     return CreateFontIndirectW(&lf);
+}
+
+static int font_works(const WCHAR *face, int size)
+{
+    HFONT f = mkfont_face(face, size, FW_BOLD);
+    HDC dc; HFONT old; TEXTMETRICW tm; int ok = 0;
+    if (!f) return 0;
+    dc = GetDC(NULL);
+    if (dc) {
+        old = (HFONT)SelectObject(dc, f);
+        if (GetTextMetricsW(dc, &tm)) {
+            /* jesli system podmienil na inny font, nazwa sie rozni */
+            WCHAR real[32];
+            if (GetTextFaceW(dc, 32, real) > 0) {
+                if (_wcsicmp(real, face) == 0) ok = 1;
+            } else ok = 1;
+        }
+        SelectObject(dc, old);
+        ReleaseDC(NULL, dc);
+    }
+    DeleteObject(f);
+    return ok;
+}
+
+static HFONT mkfont(int size, int weight)
+{
+    int i;
+    if (g_font_pick < 0) {
+        g_font_pick = (int)(sizeof(g_font_candidates)/sizeof(g_font_candidates[0])) - 1;
+        for (i = 0; i < (int)(sizeof(g_font_candidates)/sizeof(g_font_candidates[0])); i++) {
+            if (font_works(g_font_candidates[i], -16)) { g_font_pick = i; break; }
+        }
+        logf_("font wybrany: %S (idx=%d)\n", g_font_candidates[g_font_pick], g_font_pick);
+    }
+    return mkfont_face(g_font_candidates[g_font_pick], size, weight);
 }
 
 static void make_fonts(void)
@@ -750,6 +798,16 @@ static int text_w(HDC dc, const WCHAR *s, HFONT f)
     DrawTextW(dc,s,-1,&r,DT_LEFT|DT_TOP|DT_SINGLELINE|DT_CALCRECT|DT_NOCLIP);
     SelectObject(dc,old);
     return r.right - r.left;
+}
+
+static int text_h(HDC dc, const WCHAR *s, HFONT f)
+{
+    RECT r; HFONT old = (HFONT)SelectObject(dc,f);
+    SetBkMode(dc,TRANSPARENT);
+    r.left=0; r.top=0; r.right=0; r.bottom=0;
+    DrawTextW(dc,s,-1,&r,DT_LEFT|DT_TOP|DT_SINGLELINE|DT_CALCRECT|DT_NOCLIP);
+    SelectObject(dc,old);
+    return r.bottom - r.top;
 }
 
 static void text_center(HDC dc, int cx, int y, const WCHAR *s, COLORREF c, HFONT f)
@@ -820,9 +878,22 @@ static void draw_screen(HDC dc, int W, int H)
     if (gpsOk) wsprintfW(buf,L"%d",g_speed_kmh);
     else wcscpy(buf,L"--");
     cx=W/2; spY=26;
-    text_center(dc,cx,spY,buf,gpsOk?TTEXT:TDIM,g_fSpeed);
-    text_center(dc,cx,spY+100,L"km/h",TDIM,g_fUnit);
-    text_center(dc,cx,spY+122,THEME_NAMES[g_theme],TDIM,g_fLabel);
+    {
+        /* liczba + "km/h" na jednej linii, wysrodkowane jako calosc */
+        WCHAR unit[] = L"km/h";
+        int wnum = text_w(dc, buf, g_fSpeed);
+        int wunit = text_w(dc, unit, g_fUnit);
+        int gap = 10;
+        int total = wnum + gap + wunit;
+        int x0 = cx - total/2;
+        int hSpeed = text_h(dc, buf, g_fSpeed);
+        int hUnit  = text_h(dc, unit, g_fUnit);
+        /* "km/h" dosuniete do dolnej linii cyfr (baseline) */
+        int yUnit = spY + hSpeed - hUnit - 6;
+        text_at(dc, x0, spY, buf, gpsOk?TTEXT:TDIM, g_fSpeed);
+        text_at(dc, x0 + wnum + gap, yUnit, unit, TDIM, g_fUnit);
+    }
+    text_center(dc,cx,spY+118,THEME_NAMES[g_theme],TDIM,g_fLabel);
 
     bw=(W-18)/2; bh=58; by=H-bh-34;
     round_rect(dc,6,by,bw,bh,8,TPANEL,TLINE);
