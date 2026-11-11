@@ -746,7 +746,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         odo_tick();
         tick++;
         if ((tick % 120) == 0) {
-            int ow=(int)g_odo_km, of=(int)((g_odo_km-ow)*10.0;
+            int ow=(int)g_odo_km, of=(int)((g_odo_km-ow)*10.0);
             if (of<0)of=0; if(of>9)of=9;
             odo_save();
             logf_("HB 60s: fix=%d sats=%d/%d spd=%d odo=%d.%d alt=%d rx=%d nmea=%d\n",
