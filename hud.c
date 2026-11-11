@@ -22,6 +22,8 @@
 #define LOG_FILE_B    "\\SDMMC\\hud_log.txt"
 #define THEME_FILE_A  "\\Storage Card\\hud_theme.txt"
 #define THEME_FILE_B  "\\SDMMC\\hud_theme.txt"
+#define FONT_FILE_A   "\\Storage Card\\hud_font.txt"
+#define FONT_FILE_B   "\\SDMMC\\hud_font.txt"
 
 #define FIXED_PORT    L"COM2:"
 #define FIXED_PORT2   L"COM7:"
@@ -170,6 +172,57 @@ static void w2a(const WCHAR *src, char *dst, int maxlen)
     int i;
     for (i = 0; i < maxlen-1 && src[i]; i++) dst[i] = (char)src[i];
     dst[i] = 0;
+}
+
+/* ============ WYBOR FONTU ============ */
+static const WCHAR *g_font_candidates[] = {
+    L"Terminal",        /* pixelowy bitmapowy, jest w kazdym WinCE */
+    L"Fixedsys",
+    L"MS Sans Serif",
+    L"Tahoma",
+    L"Courier New",
+    L"Arial"
+};
+static int g_font_pick = -1;
+#define FONT_COUNT ((int)(sizeof(g_font_candidates)/sizeof(g_font_candidates[0])))
+
+static void font_load(void)
+{
+    FILE *f = fopen(FONT_FILE_A, "r");
+    int v = -1;
+    if (!f) f = fopen(FONT_FILE_B, "r");
+    if (f) {
+        if (fscanf(f, "%d", &v) == 1) { }
+        fclose(f);
+    }
+    if (v >= 0 && v < FONT_COUNT) {
+        /* sprawdz, czy wybrany font naprawde jest w systemie */
+        if (font_works(g_font_candidates[v], -16, v)) {
+            g_font_pick = v;
+            logf_("font z pliku: %S (idx=%d)\n", g_font_candidates[v], v);
+            return;
+        }
+        logf_("font z pliku %S niedostepny, auto\n", g_font_candidates[v]);
+    }
+    g_font_pick = -1;
+}
+
+static void font_save(void)
+{
+    FILE *f = fopen(FONT_FILE_A, "w");
+    if (!f) f = fopen(FONT_FILE_B, "w");
+    if (f) { fprintf(f, "%d\n", g_font_pick); fclose(f); }
+}
+
+static void font_resolve(void)
+{
+    int i;
+    if (g_font_pick >= 0) return;
+    for (i = 0; i < FONT_COUNT; i++) {
+        if (font_works(g_font_candidates[i], -16, i)) { g_font_pick = i; break; }
+    }
+    if (g_font_pick < 0) g_font_pick = FONT_COUNT - 1;
+    logf_("font wybrany: %S (idx=%d)\n", g_font_candidates[g_font_pick], g_font_pick);
 }
 
 /* ============ MOTYW / LICZNIK pliki ============ */
@@ -706,15 +759,6 @@ static DWORD WINAPI gps_thread(LPVOID param)
 /* ============ RYSOWANIE ============ */
 /* Fonty w kolejnosci preferencji: pixelowe/retro najpierw.
  * Wybieramy pierwszy, ktory system faktycznie ma. */
-static const WCHAR *g_font_candidates[] = {
-    L"Terminal",        /* pixelowy bitmapowy, jest w kazdym WinCE */
-    L"Fixedsys",
-    L"MS Sans Serif",
-    L"Tahoma",
-    L"Courier New",
-    L"Arial"
-};
-static int g_font_pick = -1;
 
 static HFONT mkfont_face(const WCHAR *face, int size, int weight)
 {
@@ -730,8 +774,12 @@ static HFONT mkfont_face(const WCHAR *face, int size, int weight)
     return CreateFontIndirectW(&lf);
 }
 
-static int font_works(const WCHAR *face, int size)
+static int g_font_tested[8];
+static int g_font_ok[8];
+
+static int font_works(const WCHAR *face, int size, int idx)
 {
+    if (idx >= 0 && idx < 8 && g_font_tested[idx]) return g_font_ok[idx];
     HFONT f = mkfont_face(face, size, FW_BOLD);
     HDC dc; HFONT old; TEXTMETRICW tm; int ok = 0;
     if (!f) return 0;
@@ -749,24 +797,23 @@ static int font_works(const WCHAR *face, int size)
         ReleaseDC(NULL, dc);
     }
     DeleteObject(f);
+    if (idx >= 0 && idx < 8) { g_font_tested[idx] = 1; g_font_ok[idx] = ok; }
     return ok;
 }
 
 static HFONT mkfont(int size, int weight)
 {
-    int i;
-    if (g_font_pick < 0) {
-        g_font_pick = (int)(sizeof(g_font_candidates)/sizeof(g_font_candidates[0])) - 1;
-        for (i = 0; i < (int)(sizeof(g_font_candidates)/sizeof(g_font_candidates[0])); i++) {
-            if (font_works(g_font_candidates[i], -16)) { g_font_pick = i; break; }
-        }
-        logf_("font wybrany: %S (idx=%d)\n", g_font_candidates[g_font_pick], g_font_pick);
-    }
+    font_resolve();
     return mkfont_face(g_font_candidates[g_font_pick], size, weight);
 }
 
 static void make_fonts(void)
 {
+    if (g_fSpeed) DeleteObject(g_fSpeed);
+    if (g_fUnit)  DeleteObject(g_fUnit);
+    if (g_fLabel) DeleteObject(g_fLabel);
+    if (g_fVal)   DeleteObject(g_fVal);
+    if (g_fBtn)   DeleteObject(g_fBtn);
     g_fSpeed = mkfont(-96, FW_BOLD);
     g_fUnit  = mkfont(-22, FW_BOLD);
     g_fLabel = mkfont(-14, FW_BOLD);
@@ -911,9 +958,23 @@ static void draw_screen(HDC dc, int W, int H)
     else wcscpy(buf,L"-- m");
     text_at(dc,22+bw,by+21,buf,gpsOk?TTEXT:TDIM,g_fVal);
 
-    rw=100; rh=24; rx=W-rw-6; ry=H-rh-6;
+    /* trzy guziki w prawym dolnym rogu: FONT | WYGLAD | RESET (od gory) */
+    rw=100; rh=22; rx=W-rw-6; ry=H-rh-6;
     round_rect(dc,rx,ry,rw,rh,6,TBTN,TBTNL);
-    text_center(dc,rx+rw/2,ry+4,L"RESET",TER,g_fBtn);
+    text_center(dc,rx+rw/2,ry+3,L"RESET",TER,g_fBtn);
+
+    ry -= (rh+4);
+    round_rect(dc,rx,ry,rw,rh,6,TBTN,TBTNL);
+    text_center(dc,rx+rw/2,ry+3,L"WYGLAD",TTEXT,g_fBtn);
+
+    ry -= (rh+4);
+    {
+        WCHAR fb[40];
+        font_resolve();
+        wsprintfW(fb,L"FONT: %s", g_font_candidates[g_font_pick]);
+        round_rect(dc,rx,ry,rw,rh,6,TBTN,TBTNL);
+        text_center(dc,rx+rw/2,ry+3,fb,TAC,g_fBtn);
+    }
 }
 
 /* ============ OKNO ============ */
@@ -923,6 +984,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
     case WM_CREATE:
+        font_load();
         make_fonts();
         logf_("WM_CREATE: okno gotowe\n");
         return 0;
@@ -953,12 +1015,32 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             InvalidateRect(hwnd,NULL,FALSE);
             return 0;
         }
-        rx=r.right-rw-6; ry=r.bottom-rh-6;
+        /* trzy guziki: RESET (dol), WYGLAD (srodek), FONT (gora) */
+        rw=100; rh=22; rx=r.right-rw-6; ry=r.bottom-rh-6;
         if (x>=rx && x<=rx+rw && y>=ry && y<=ry+rh) {
             g_odo_km=0.0; g_have_last=0;
             odo_save();
             logf_("licznik RESET\n");
             InvalidateRect(hwnd,NULL,FALSE);
+            return 0;
+        }
+        ry -= (rh+4);
+        if (x>=rx && x<=rx+rw && y>=ry && y<=ry+rh) {
+            g_theme = (g_theme+1)%3;
+            theme_save();
+            logf_("WYGLAD -> %d (%S)\n", g_theme, THEME_NAMES[g_theme]);
+            InvalidateRect(hwnd,NULL,FALSE);
+            return 0;
+        }
+        ry -= (rh+4);
+        if (x>=rx && x<=rx+rw && y>=ry && y<=ry+rh) {
+            font_resolve();
+            g_font_pick = (g_font_pick+1) % FONT_COUNT;
+            font_save();
+            make_fonts();
+            logf_("FONT -> %S (idx=%d)\n", g_font_candidates[g_font_pick], g_font_pick);
+            InvalidateRect(hwnd,NULL,FALSE);
+            return 0;
         }
         return 0;
     }
