@@ -23,8 +23,8 @@
 #define THEME_FILE_A  "\\Storage Card\\hud_theme.txt"
 #define THEME_FILE_B  "\\SDMMC\\hud_theme.txt"
 
-#define FIXED_PORT    L""
-#define FIXED_BAUD    0
+#define FIXED_PORT    L"COM2:"
+#define FIXED_BAUD    CBR_4800
 
 #define PI_D 3.14159265358979323846
 #define IOCTL_SERVICE_REFRESH 0x4100000C
@@ -342,16 +342,10 @@ static void send_body(HANDLE h, const char *body)
 
 static void wakeup_for_baud(HANDLE h, DWORD baud)
 {
-    char tmp[40];
-    int b = (int)baud;
-    sprintf(tmp, "PSRF100,1,%d,8,1,0", b);
-    send_body(h, tmp);
-    send_body(h, "PSRF103,00,00,01,01");
-    send_body(h, "PSRF103,02,00,01,01");
-    send_body(h, "PSRF103,03,00,01,01");
-    send_body(h, "PSRF103,04,00,01,01");
-    send_body(h, "PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0");
-    send_body(h, "PMTK220,1000");
+    (void)h; (void)baud;
+    /* NIC NIE WYSYLAMY: urzadzenie jest juz ustawione na NMEA 4800.
+     * Wysylanie PSRF/PMTK moze przelaczyc chip w tryb binarny i zabic port. */
+    logf_("  (no TX - port already NMEA 4800)\n");
 }
 
 /* ============ PORT ============ */
@@ -396,7 +390,7 @@ static HANDLE open_port(const WCHAR *port, DWORD baud, int do_wakeup)
 
     if (do_wakeup) {
         wakeup_for_baud(h, baud);
-        Sleep(400);
+        Sleep(1500);
     }
     memset(&st, 0, sizeof(st));
     if (ClearCommError(h, &errs, &st))
@@ -458,12 +452,41 @@ static DWORD WINAPI gps_thread(LPVOID param)
         g_probe_result = 0;
 
         if (FIXED_PORT[0]) {
-            HANDLE h = open_port(FIXED_PORT, FIXED_BAUD ? FIXED_BAUD : CBR_4800, 0);
+            HANDLE h = open_port(FIXED_PORT, FIXED_BAUD ? FIXED_BAUD : CBR_4800, 1);
             if (h != INVALID_HANDLE_VALUE) {
-                wcscpy(g_used_port, FIXED_PORT);
-                g_used_baud = FIXED_BAUD ? FIXED_BAUD : CBR_4800;
-                g_hGps = h; g_scanning = 0; g_probe_result = 1; ok = 1;
-                logf_("using FIXED_PORT\n");
+                /* sprawdz czy naprawde leca dane zanim uznasz port za dobry */
+                int probe_ok = 0, prxn = 0;
+                DWORD pdl = GetTickCount() + 3000;
+                DWORD pgot;
+                while (GetTickCount() < pdl && g_running && !probe_ok) {
+                    pgot = 0;
+                    if (!ReadFile(h, buf, sizeof(buf), &pgot, NULL) || pgot == 0)
+                        continue;
+                    g_total_bytes += pgot;
+                    g_last_rx_tick = GetTickCount();
+                    {
+                        DWORD k;
+                        for (k = 0; k < pgot; k++) {
+                            char c = buf[k];
+                            if (c == '\n' || c == '\r') {
+                                if (prxn > 6 && rx[0] == '$') { probe_ok = 1; break; }
+                                prxn = 0;
+                            } else if (c == '$') { prxn = 0; rx[prxn++] = c; }
+                            else if (prxn < (int)sizeof(rx)-2) rx[prxn++] = c;
+                            else prxn = 0;
+                        }
+                    }
+                }
+                logf_("FIXED_PORT probe: %s\n", probe_ok ? "NMEA OK" : "cisza");
+                if (probe_ok) {
+                    wcscpy(g_used_port, FIXED_PORT);
+                    g_used_baud = FIXED_BAUD ? FIXED_BAUD : CBR_4800;
+                    g_hGps = h; g_scanning = 0; g_probe_result = 1; ok = 1;
+                    logf_("using FIXED_PORT\n");
+                } else {
+                    CloseHandle(h);
+                    logf_("FIXED_PORT cisza, lece ze skanem\n");
+                }
             }
         }
 
