@@ -225,7 +225,15 @@ static void w2a(const WCHAR *src, char *dst, int maxlen)
 }
 
 /* ============ WYBOR FONTU ============ */
+/* Sciezki do pliku z fontem Minecraft (karta SD albo Windows) */
+#define FONT_TTF_A    "\\Storage Card\\Minecraft.ttf"
+#define FONT_TTF_B    "\\SDMMC\\Minecraft.ttf"
+#define FONT_TTF_C    "\\Windows\\Minecraft.ttf"
+
+static int g_minecraft_on = 0;   /* 1 = Minecraft.ttf zaladowany przez AddFontResourceW */
+
 static const WCHAR *g_font_candidates[] = {
+    L"Minecraft",       /* z pliku Minecraft.ttf (AddFontResourceW) */
     L"Terminal",        /* pixelowy bitmapowy, jest w kazdym WinCE */
     L"Fixedsys",
     L"MS Sans Serif",
@@ -995,6 +1003,7 @@ static HFONT mkfont_face(const WCHAR *face, int size, int weight)
 
 static int g_font_tested[8];
 static int g_font_ok[8];
+/* uwaga: FONT_COUNT = 7, cache 8 wystarczy */
 
 static int font_works(const WCHAR *face, int size, int idx)
 {
@@ -1345,6 +1354,35 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
     case WM_CREATE:
+        {
+            /* Sprobuj zaladowac Minecraft.ttf z karty albo z \Windows.
+             * Na WinCE wystarczy ze plik tam lezy - AddFontResourceW
+             * rejestruje go bez restartu. */
+            const char *ttf_try[] = { FONT_TTF_A, FONT_TTF_B, FONT_TTF_C };
+            int ti;
+            for (ti = 0; ti < 3; ti++) {
+                FILE *tf = fopen(ttf_try[ti], "rb");
+                if (tf) {
+                    fclose(tf);
+                    {
+                        WCHAR wttf[64];
+                        int ki;
+                        for (ki = 0; ki < 63 && ttf_try[ti][ki]; ki++)
+                            wttf[ki] = (WCHAR)(unsigned char)ttf_try[ti][ki];
+                        wttf[ki] = 0;
+                        if (AddFontResourceW(wttf) > 0) {
+                            g_minecraft_on = 1;
+                            logf_("Minecraft.ttf zaladowany: %s\n", ttf_try[ti]);
+                            break;
+                        } else {
+                            logf_("AddFontResource FAIL: %s\n", ttf_try[ti]);
+                        }
+                    }
+                }
+            }
+            if (!g_minecraft_on)
+                logf_("Minecraft.ttf nie znaleziony (karta/Windows)\n");
+        }
         font_load();
         make_fonts();
         logf_("WM_CREATE: okno gotowe\n");
