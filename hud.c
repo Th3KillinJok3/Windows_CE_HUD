@@ -1353,7 +1353,27 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         PAINTSTRUCT ps; HDC dc; RECT r;
         dc = BeginPaint(hwnd,&ps);
         GetClientRect(hwnd,&r);
-        draw_screen(dc,r.right,r.bottom);
+        /* Ramka dwusciankowa: rysujemy CALY ekran do pamieci i wklejamy
+         * jednym BitBlt. Bez tego kazdy FillRect/DrawText trafial na ekran
+         * osobno i widac bylo migotanie (brak podwojnego buforowania). */
+        {
+            HDC mem = CreateCompatibleDC(dc);
+            if (mem) {
+                HBITMAP bmp = CreateCompatibleBitmap(dc, r.right, r.bottom);
+                if (bmp) {
+                    HGDIOBJ old = SelectObject(mem, bmp);
+                    draw_screen(mem, r.right, r.bottom);
+                    BitBlt(dc, 0, 0, r.right, r.bottom, mem, 0, 0, SRCCOPY);
+                    SelectObject(mem, old);
+                    DeleteObject(bmp);
+                } else {
+                    draw_screen(dc, r.right, r.bottom);
+                }
+                DeleteDC(mem);
+            } else {
+                draw_screen(dc, r.right, r.bottom);
+            }
+        }
         EndPaint(hwnd,&ps);
         return 0;
     }
@@ -1406,6 +1426,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         return 0;
     }
+    case WM_ERASEBKGND:
+        /* Sami malujemy caly ekran (double buffer) - system nie ma czego
+         * zamalowywac. Bez tego widac biale/zielone migniecie pod ramka. */
+        return 1;
     case WM_TIMER: {
         static int tick = 0;
         static int last_key = -1;
