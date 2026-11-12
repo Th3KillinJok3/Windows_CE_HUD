@@ -1838,43 +1838,78 @@ static void draw_screen(HDC dc, int W, int H)
                 text_at(dc, rx - mw, y2 + 4, mb, RGB(255,115,0), g_fLabel);
             }
         }
-        /* Right bar column */
+        /* Right section: hour, battery, GPS signal */
         {
             int rx = W * 80 / 100 + 4;
             int rw = W - rx - 6;
-            text_at(dc, rx, 10, L"1/1", RGB(255,125,0), g_fTop);
+            int y = 10;
+            /* hour */
+            {
+                SYSTEMTIME st;
+                WCHAR tb[16];
+                GetLocalTime(&st);
+                if (g_clock_24h) wsprintfW(tb, L"%02d:%02d", st.wHour, st.wMinute);
+                else {
+                    int h12 = st.wHour % 12;
+                    if (h12 == 0) h12 = 12;
+                    wsprintfW(tb, L"%d:%02d", h12, st.wMinute);
+                }
+                text_at(dc, rx, y, tb, RGB(255,125,0), g_fLabel);
+                y += (H*8/100) + 4;
+            }
+            /* battery */
             {
                 int batt = (g_batt_pct >= 0) ? g_batt_pct : 50;
                 int active = batt * 8 / 100; if (active < 0) active = 0; if (active > 8) active = 8;
-                int bars = 0;
-                if (!gpsOk || g_scanning) {
-                    if (g_sats_view > 0) bars = (g_sats_view >= 8) ? 8 : (g_sats_view >= 4 ? 4 : 2);
-                    active = bars;
-                }
                 int i;
+                text_at(dc, rx, y, L"BAT", RGB(255,115,0), g_fTop);
+                y += (H*5/100) + 2;
                 for (i = 0; i < 8; i++) {
-                    int y = 12 + (H*32/100) + i * ((H*12/100) + (H*3/100));
-                    if (y + (H*12/100) > H - 36) break;
                     COLORREF c = (i < active) ? RGB(255,175,25) : RGB(78,20,4);
-                    fill(dc, rx, y, rw - 8, H*12/100, c);
+                    fill(dc, rx, y, rw - 8, H*6/100, c);
                     {
                         HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,115,0));
                         HPEN op = (HPEN)SelectObject(dc, pen);
                         HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
-                        Rectangle(dc, rx, y, rx + (rw - 8), y + (H*12/100));
+                        Rectangle(dc, rx, y, rx + (rw - 8), y + (H*6/100));
                         SelectObject(dc, op); SelectObject(dc, ob);
                         DeleteObject(pen);
                     }
+                    y += (H*6/100) + 2;
+                }
+                y += 4;
+            }
+            /* GPS signal */
+            {
+                int bars = 0;
+                if (gpsOk && g_hdop10 != 9999 && g_hdop10 < 200) {
+                    if (g_hdop10 <= 10) bars = 8;
+                    else if (g_hdop10 <= 20) bars = 6;
+                    else if (g_hdop10 <= 40) bars = 4;
+                    else if (g_hdop10 <= 80) bars = 2;
+                } else if (g_sats_view > 0) {
+                    bars = (g_sats_view >= 8) ? 6 : (g_sats_view >= 4 ? 4 : 2);
+                }
+                if (bars > 8) bars = 8;
+                int i;
+                text_at(dc, rx, y, L"GPS", RGB(255,115,0), g_fTop);
+                y += (H*5/100) + 2;
+                for (i = 0; i < 8; i++) {
+                    COLORREF c = (i < bars) ? RGB(255,175,25) : RGB(78,20,4);
+                    fill(dc, rx, y, rw - 8, H*6/100, c);
+                    {
+                        HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,115,0));
+                        HPEN op = (HPEN)SelectObject(dc, pen);
+                        HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+                        Rectangle(dc, rx, y, rx + (rw - 8), y + (H*6/100));
+                        SelectObject(dc, op); SelectObject(dc, ob);
+                        DeleteObject(pen);
+                    }
+                    y += (H*6/100) + 2;
                 }
             }
-            text_at(dc, rx + rw - 12, 12, L"1/1", RGB(255,125,0), g_fTop);
-            text_at(dc, rx + rw - 12, (H*45/100), L"mid", RGB(255,115,0), g_fTop);
-            {
-                COLORREF rc = RGB(255,115,0);
-                if ((g_batt_pct >= 0 && g_batt_pct < 20) || !gpsOk || g_scanning) rc = RGB(255,45,15);
-                text_at(dc, rx + rw - 12, H - 40, L"R", rc, g_fLabel);
-            }
         }
+
     }
 
     /* ---------- EL_GLOW CITROEN BX (320x240) ---------- */
@@ -2050,33 +2085,51 @@ static void draw_screen(HDC dc, int W, int H)
                 text_at(dc, 16, 144, ab, RGB(35,255,175), g_fLabel);
                 text_at(dc, 16, 160, L"ALT", RGB(12,58,44), g_fTop);
             }
-            /* right */
+            /* right: hour, battery, GPS signal */
             {
-                HPEN pen = CreatePen(PS_SOLID, 1, RGB(35,255,175));
-                HBRUSH br = CreateSolidBrush(RGB(5,11,9));
-                HPEN op = (HPEN)SelectObject(dc, pen);
-                HBRUSH ob = (HBRUSH)SelectObject(dc, br);
-                Rectangle(dc, W - 78, 96, W - 12, 134);
-                Rectangle(dc, W - 78, 140, W - 12, 178);
-                SelectObject(dc, op); SelectObject(dc, ob);
-                DeleteObject(pen); DeleteObject(br);
-            }
-            {
-                int ow, of;
-                odo_disp(&ow, &of);
-                WCHAR obuf[32];
-                wsprintfW(obuf, L"ODO %d.%d", ow, of);
-                text_at(dc, W - 74, 100, obuf, RGB(35,255,175), g_fLabel);
-            }
-            {
-                WCHAR mb[32];
-                wsprintfW(mb, L"MAX %d", speed_max_disp());
-                text_at(dc, W - 74, 116, mb, RGB(35,255,175), g_fLabel);
-            }
-            {
-                const WCHAR *u = g_imperial ? T(S_MI) : T(S_KM);
-                text_at(dc, W - 74, 144, (WCHAR*)u, RGB(12,58,44), g_fTop);
-                text_at(dc, W - 74, 160, g_imperial ? L"MPH" : L"KMH", RGB(35,255,175), g_fLabel);
+                /* hour */
+                {
+                    SYSTEMTIME st;
+                    WCHAR tb[16];
+                    GetLocalTime(&st);
+                    if (g_clock_24h) wsprintfW(tb, L"%02d:%02d", st.wHour, st.wMinute);
+                    else {
+                        int h12 = st.wHour % 12;
+                        if (h12 == 0) h12 = 12;
+                        wsprintfW(tb, L"%d:%02d", h12, st.wMinute);
+                    }
+                    text_at(dc, W - 74, 96, tb, RGB(35,255,175), g_fLabel);
+                }
+                /* battery */
+                {
+                    int batt = (g_batt_pct >= 0) ? g_batt_pct : 50;
+                    int active = batt * 8 / 100; if (active < 0) active = 0; if (active > 8) active = 8;
+                    int k, y = 112;
+                    for (k = 0; k < 8; k++) {
+                        COLORREF c = (k < active) ? RGB(35,255,175) : RGB(12,58,44);
+                        fill(dc, W - 74, y, 58, 4, c);
+                        y += 6;
+                    }
+                }
+                /* GPS signal */
+                {
+                    int bars = 0;
+                    if (gpsOk && g_hdop10 != 9999 && g_hdop10 < 200) {
+                        if (g_hdop10 <= 10) bars = 8;
+                        else if (g_hdop10 <= 20) bars = 6;
+                        else if (g_hdop10 <= 40) bars = 4;
+                        else if (g_hdop10 <= 80) bars = 2;
+                    } else if (g_sats_view > 0) {
+                        bars = (g_sats_view >= 8) ? 6 : (g_sats_view >= 4 ? 4 : 2);
+                    }
+                    if (bars > 8) bars = 8;
+                    int k, y = 164;
+                    for (k = 0; k < 8; k++) {
+                        COLORREF c = (k < bars) ? RGB(35,255,175) : RGB(12,58,44);
+                        fill(dc, W - 74, y, 58, 4, c);
+                        y += 6;
+                    }
+                }
             }
         }
     }
@@ -2334,6 +2387,20 @@ static void draw_screen(HDC dc, int W, int H)
             if (tw > avail) off = g_marq % (tw + 30);
             text_at(dc, px - off, by2 + (BOT_H - 12) / 2, wbuf, fg, g_fTop);
         }
+        /* THEME button - bottom */
+        {
+            int mx = W - 116;
+            fill(dc, mx, by2, 54, BOT_H, TBTN);
+            {
+                HPEN pen = CreatePen(PS_SOLID, 1, TBTNL);
+                HPEN op = (HPEN)SelectObject(dc, pen);
+                HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+                Rectangle(dc, mx, by2, mx + 54, by2 + BOT_H);
+                SelectObject(dc, op); SelectObject(dc, ob);
+                DeleteObject(pen);
+            }
+            text_center(dc, mx + 27, by2 + (BOT_H - 12) / 2, L"THEME", TTEXT, g_fTop);
+        }
         /* MENU button - bottom right */
         {
             int mx = W - 58;
@@ -2492,6 +2559,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         }
 
+        /* THEME button - bottom */
+        if (!g_menu_open && x >= W - 116 && x < W - 58 && y >= H - BOT_H) {
+            g_theme = (g_theme + 1) % THEME_COUNT;
+            theme_save();
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+        }
         /* MENU button - bottom right */
         if (!g_menu_open && x >= W - 58 && y >= H - BOT_H) {
             g_menu_open = 1;
