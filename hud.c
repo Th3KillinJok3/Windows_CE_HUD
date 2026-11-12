@@ -43,42 +43,26 @@ typedef struct {
     COLORREF accent, accentD, warn, warnBg, err, errBg, btn, btnLine;
 } Theme;
 
-/* Theme 0 - VERSO: red overlay taken from the Toyota Verso 2017
- * instrument cluster (orange glow) recoloured to red. Dark, high
- * contrast, soft red halo around the digits. */
-static const Theme THEMES[6] = {
-    { RGB(8,4,6), RGB(30,10,14), RGB(96,18,26), RGB(255,86,72),
-      RGB(150,60,58), RGB(255,34,34), RGB(120,12,16),
-      RGB(255,150,40), RGB(70,36,6), RGB(255,80,60), RGB(80,10,10),
-      RGB(46,12,16), RGB(140,28,34) },
-    /* 1 CZERWONY - dark background, red accent, bright digits */
-    { RGB(12,10,11), RGB(24,18,20), RGB(52,32,36), RGB(245,235,236),
-      RGB(155,125,130), RGB(255,64,64), RGB(70,16,18),
-      RGB(255,196,64), RGB(46,34,8), RGB(255,120,120), RGB(56,14,14),
-      RGB(58,26,28), RGB(112,44,48) },
-    { RGB(12,10,6), RGB(24,19,10), RGB(52,40,16), RGB(255,243,220),
-      RGB(160,140,110), RGB(251,191,36), RGB(66,48,10),
-      RGB(125,211,252), RGB(20,32,44), RGB(248,113,113), RGB(42,26,26),
-      RGB(60,32,32), RGB(120,60,60) },
-    { RGB(6,10,16), RGB(12,20,28), RGB(24,42,58), RGB(220,238,255),
-      RGB(120,150,175), RGB(96,200,255), RGB(16,48,72),
-      RGB(251,191,36), RGB(42,34,12), RGB(248,113,113), RGB(42,26,26),
-      RGB(60,32,32), RGB(120,60,60) },
-    /* 4 DOTMATRIX - 1980s VFD green/amber */
+static const Theme THEMES[3] = {
+    /* 0 DOTMATRIX - Toyota Verso center dot-matrix MFD */
     { RGB(2,8,4), RGB(6,20,10), RGB(10,40,18), RGB(120,255,140),
       RGB(60,160,80), RGB(80,255,100), RGB(6,30,12),
       RGB(255,190,60), RGB(40,28,6), RGB(255,120,80), RGB(30,14,4),
       RGB(10,30,14), RGB(30,80,40) },
-    /* 5 EL_GLOW - electroluminescent aqua-cyan */
+    /* 1 EL_GLOW - Citroen BX Digit full-width VFD */
     { RGB(2,8,12), RGB(6,20,26), RGB(8,40,52), RGB(200,255,250),
       RGB(80,180,190), RGB(0,245,230), RGB(0,60,56),
       RGB(255,200,80), RGB(40,30,8), RGB(255,120,120), RGB(30,8,8),
       RGB(6,26,28), RGB(0,120,110) },
+    /* 2 CZERWONY - classic dark red */
+    { RGB(12,10,11), RGB(24,18,20), RGB(52,32,36), RGB(245,235,236),
+      RGB(155,125,130), RGB(255,64,64), RGB(70,16,18),
+      RGB(255,196,64), RGB(46,34,8), RGB(255,120,120), RGB(56,14,14),
+      RGB(58,26,28), RGB(112,44,48) },
 };
-#define THEME_COUNT 6
+
 static const WCHAR *THEME_NAMES[THEME_COUNT] = {
-    L"VERSO", L"CZERWONY", L"AMBER", L"NIEBIESKI",
-    L"DOTMATRIX", L"EL_GLOW"
+    L"DOTMATRIX", L"EL_GLOW", L"CZERWONY"
 };
 static int g_theme = 0;          /* 0 = VERSO (default) */
 static int g_menu_open = 0;      /* on-screen settings menu */
@@ -98,8 +82,8 @@ static int g_menu_open = 0;      /* on-screen settings menu */
 
 /* Theme style helpers - which rendering path a theme uses. */
 static int dotmatrix_theme(void) { return (g_theme == 0); }
-static int toyota_theme(void)   { return (g_theme == 4); }
-static int elglow_theme(void)   { return (g_theme == 5); }
+static int toyota_theme(void)   { return (g_theme == 0); }
+static int elglow_theme(void)   { return (g_theme == 1); }
 static int vfd_theme(void)      { return toyota_theme(); }
 
 

@@ -92,12 +92,9 @@ the WinCE core font has no glyphs, so no text is lost.
 
 | # | Name | Look |
 |---|---|---|
-| 0 | VERSO | red overlay of the Toyota Verso 2017 cluster: near-black background, deep red panels, glowing red digits |
-| 1 | CZERWONY | classic dark red |
-| 2 | AMBER | amber / orange |
-| 3 | NIEBIESKI | blue |
-| 4 | DOTMATRIX | 1980s VFD green/amber display |
-| 5 | EL_GLOW | electroluminescent aqua-cyan display |
+| 0 | DOTMATRIX | Toyota Verso center dot-matrix MFD |
+| 1 | EL_GLOW | Citroen BX Digit full-width VFD |
+| 2 | CZERWONY | classic dark red |
 
 The **THEME** button cycles them and writes the choice to `hud_theme.txt`,
 which wins over `theme=` in `hud.ini`.
