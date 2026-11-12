@@ -1458,9 +1458,10 @@ static void odo_tick(void)
 /* ============ BUTTON LAYOUT (shared by drawing and touch) ============
  * Przycisk X jest w prawym GORNYM rogu, wiec pasek statusu konczy sie przed nim.
  * Guziki FONT / WYGLAD / RESET stoja w JEDNYM rzedzie przy DOLNEJ krawedzi. */
-#define BTN_H    22
+#define BTN_H    22          /* kept for the X button geometry only */
 #define BTN_GAP  4
 #define BTN_R    6
+#define BOT_H    18          /* bottom status bar height */
 #define TOP_H    18          /* wysokosc paska statusu */
 #define X_W      26          /* szerokosc guzika X */
 
@@ -1663,7 +1664,7 @@ static void draw_screen(HDC dc, int W, int H)
             wsprintfW(cb, L"%s %d\xb0", DIRS[cdx], g_course);
         else
             wcscpy(cb, L"--");
-        yrow = H - BTN_H - BTN_R - 8 - 14;
+        yrow = H - BOT_H - 8 - 14;
         text_center(dc, W/2 - 70, yrow, cb, gpsOk?TAC:TDIM, g_fLabel);
         wsprintfW(cb, L"max %d", g_speed_max);
         text_center(dc, W/2 + 70, yrow, cb, TDIM, g_fLabel);
@@ -1672,7 +1673,7 @@ static void draw_screen(HDC dc, int W, int H)
     /* ---------- PANELS: odometer + altitude (above the button row) ---------- */
     {
         int panel_h = 46;
-        int panel_by = H - BTN_H - BTN_R - 8 - panel_h;
+        int panel_by = H - BOT_H - 8 - panel_h;
         bw=(W-18)/2; bh=panel_h; by=panel_by;
 
         round_rect(dc,6,by,bw,bh,8,TPANEL,TLINE);
@@ -1710,33 +1711,39 @@ static void draw_screen(HDC dc, int W, int H)
         }
     }
 
-    /* ---------- BUTTON ROW at the bottom edge ---------- */
+    /* ---------- BOTTOM BAR: same GPS data as the top left corner ----------
+     * The three on-screen buttons are gone; theme, font and units are set
+     * from hud.ini only. This bar mirrors what the top bar shows on the
+     * left, so it stays readable while the top bar is scrolling. */
     {
-        int brw, brx, bry;
-        btn_row(W, H, &brw, &brx, &bry);
+        int by2 = H - BOT_H;
+        int px = 6;
+        int avail = W - 8 - px;
+        COLORREF bg = TACD, fg = TAC;
+        WCHAR wbuf[160];
 
-        /* RESET */
-        round_rect(dc,brx,bry,brw,BTN_H,BTN_R,TBTN,TBTNL);
-        text_center(dc,brx+brw/2,bry+3,T(S_RESET),TER,g_fBtn);
+        if (g_scanning)                { bg = TWNBG; fg = TWN; }
+        else if (g_probe_result == -1) { bg = TERBG; fg = TER; }
+        else if (!gpsOk)               { bg = TWNBG; fg = TWN; }
 
-        /* THEME */
-        round_rect(dc,brx+brw+BTN_GAP,bry,brw,BTN_H,BTN_R,TBTN,TBTNL);
-        text_center(dc,brx+brw+BTN_GAP+brw/2,bry+3,T(S_THEME),TTEXT,g_fBtn);
+        fill(dc, 0, by2, W, BOT_H, bg);
 
-        /* FONT */
+        if (g_scanning)
+            wcscpy(wbuf, T(S_SCAN));
+        else if (g_probe_result == -1)
+            wcscpy(wbuf, T(S_NOGPS));
+        else if (gpsOk)
+            wsprintfW(wbuf, L"%s %d %db %d/%d", g_used_port,
+                      (int)g_used_baud, g_sats, g_sats_view);
+        else
+            wsprintfW(wbuf, L"%s %d - %s %d/%d", g_used_port,
+                      (int)g_used_baud, T(S_WAITFIX), g_sats, g_sats_view);
+
         {
-            WCHAR fb[40];
-            int fx = brx + (brw + BTN_GAP) * 2;
-            font_resolve();
-            wsprintfW(fb,L"%s:%s", T(S_FONT), g_font_candidates[g_font_pick]);
-            round_rect(dc,fx,bry,brw,BTN_H,BTN_R,TBTN,TBTNL);
-            {
-                HRGN rgn = CreateRectRgn(fx+2, bry, fx+brw-2, bry+BTN_H);
-                SelectClipRgn(dc, rgn);
-                text_center(dc,fx+brw/2,bry+3,fb,TAC,g_fBtn);
-                SelectClipRgn(dc, NULL);
-                DeleteObject(rgn);
-            }
+            int tw = text_w(dc, wbuf, g_fTop);
+            int off = 0;
+            if (tw > avail) off = g_marq % (tw + 30);
+            text_at(dc, px - off, by2 + (BOT_H - 12) / 2, wbuf, fg, g_fTop);
         }
     }
 }
@@ -1825,37 +1832,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         }
 
-        btn_row(r.right, r.bottom, &brw, &brx, &bry);
-
-        /* RESET - pierwszy z lewej */
-        if (x>=brx && x<=brx+brw && y>=bry && y<=bry+BTN_H) {
-            g_odo_km=0.0; g_have_last=0; g_speed_max=0;
-            odo_save();
-            logf_("RESET odometer (max=0)\n");
-            InvalidateRect(hwnd,NULL,FALSE);
-            return 0;
-        }
-        /* WYGLAD - srodkowy */
-        if (x>=brx+brw+BTN_GAP && x<=brx+brw+BTN_GAP+brw
-            && y>=bry && y<=bry+BTN_H) {
-            g_theme = (g_theme+1)%THEME_COUNT;
-            theme_save();
-            logf_("THEME -> %d (%S)\n", g_theme, THEME_NAMES[g_theme]);
-            InvalidateRect(hwnd,NULL,FALSE);
-            return 0;
-        }
-        /* FONT - prawy */
-        if (x>=brx+(brw+BTN_GAP)*2 && x<=brx+(brw+BTN_GAP)*2+brw
-            && y>=bry && y<=bry+BTN_H) {
-            font_resolve();
-            g_font_pick = (g_font_pick+1) % FONT_COUNT;
-            font_save();
-            make_fonts();
-            logf_("FONT -> %S (idx=%d)\n",
-                  g_font_candidates[g_font_pick], g_font_pick);
-            InvalidateRect(hwnd,NULL,FALSE);
-            return 0;
-        }
+        /* The ROW of on-screen buttons is gone on purpose: theme, font and
+         * units are configured in hud.ini. Only the X button remains. */
         return 0;
     }
     case WM_ERASEBKGND:
