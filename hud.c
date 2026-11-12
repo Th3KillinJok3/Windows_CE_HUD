@@ -2421,15 +2421,16 @@ static void draw_screen(HDC dc, int W, int H)
         int mx = W - 250;
         int my = TOP_H + 4;
         int mw = 240;
-        int mh = 6 * 34 + 8;
+        int mh = 7 * 34 + 8;
         int i;
-        const WCHAR *items[6];
+        const WCHAR *items[7];
         items[0] = L"Theme";
         items[1] = L"Font";
         items[2] = L"Units";
         items[3] = L"Language";
         items[4] = L"Clock 24h";
         items[5] = L"Close";
+        items[6] = L"Exit";
         /* panel */
         fill(dc, mx, my, mw, mh, TPANEL);
         {
@@ -2440,7 +2441,7 @@ static void draw_screen(HDC dc, int W, int H)
             SelectObject(dc, op); SelectObject(dc, ob);
             DeleteObject(pen);
         }
-        for (i = 0; i < 6; i++) {
+        for (i = 0; i < 7; i++) {
             int iy = my + 4 + i * 34;
             fill(dc, mx + 4, iy, mw - 8, 30, (i == 5) ? TERBG : TBTN);
             {
@@ -2580,12 +2581,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             int i;
             int handled = 0;
             /* click outside panel closes menu */
-            if (x < mx || x > mx + mw || y < my || y > my + 6 * 34 + 8) {
+            if (x < mx || x > mx + mw || y < my || y > my + 7 * 34 + 8) {
                 g_menu_open = 0;
                 InvalidateRect(hwnd, NULL, FALSE);
                 return 0;
             }
-            for (i = 0; i < 6; i++) {
+            for (i = 0; i < 7; i++) {
                 int iy = my + 4 + i * 34;
                 if (x >= mx + 4 && x <= mx + mw - 4 && y >= iy && y <= iy + 30) {
                     handled = 1;
@@ -2604,6 +2605,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                         g_clock_24h = !g_clock_24h;
                     } else if (i == 5) { /* Close */
                         g_menu_open = 0;
+                    } else if (i == 6) { /* Exit */
+                        g_menu_open = 0;
+                        g_running = 0;
+                        odo_save();
+                        if (g_log) fclose(g_log);
+                        DestroyWindow(hwnd);
+                        return 0;
                     }
                     InvalidateRect(hwnd, NULL, FALSE);
                     break;
