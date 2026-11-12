@@ -20,14 +20,19 @@
 /* ============ CONFIG ============ */
 #define ODO_FILE_A    "\\Storage Card\\hud_odo.txt"
 #define ODO_FILE_B    "\\SDMMC\\hud_odo.txt"
+#define ODO_FILE_C    "E:\\hud_odo.txt"
 #define LOG_FILE      "\\Storage Card\\hud_log.txt"
 #define LOG_FILE_B    "\\SDMMC\\hud_log.txt"
+#define LOG_FILE_C    "E:\\hud_log.txt"
 #define THEME_FILE_A  "\\Storage Card\\hud_theme.txt"
 #define THEME_FILE_B  "\\SDMMC\\hud_theme.txt"
+#define THEME_FILE_C  "E:\\hud_theme.txt"
 #define FONT_FILE_A   "\\Storage Card\\hud_font.txt"
 #define FONT_FILE_B   "\\SDMMC\\hud_font.txt"
+#define FONT_FILE_C   "E:\\hud_font.txt"
 #define INI_FILE_A    "\\Storage Card\\hud.ini"
 #define INI_FILE_B    "\\SDMMC\\hud.ini"
+#define INI_FILE_C    "E:\\hud.ini"
 
 #define FIXED_PORT    L"COM2:"
 #define FIXED_PORT2   L"COM7:"
@@ -256,7 +261,15 @@ static void ini_load(void)
     FILE *f = fopen(INI_FILE_A, "r");
     char line[128];
     if (!f) f = fopen(INI_FILE_B, "r");
+    if (!f) f = fopen(INI_FILE_C, "r");
     if (!f) { logf_("hud.ini brak - metric + jezyk z systemu\n"); return; }
+    {
+        long pos = ftell(f);
+        unsigned char bom[3];
+        int n = (int)fread(bom, 1, 3, f);
+        if (!(n == 3 && bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF))
+            fseek(f, pos, SEEK_SET);
+    }
     while (fgets(line, sizeof(line), f)) ini_apply_line(line);
     fclose(f);
 }
@@ -301,6 +314,7 @@ static void log_open(void)
 {
     g_log = fopen(LOG_FILE, "w");
     if (!g_log) g_log = fopen(LOG_FILE_B, "w");
+    if (!g_log) g_log = fopen(LOG_FILE_C, "w");
     if (!g_log) return;
     setvbuf(g_log, NULL, _IONBF, 0);
     fprintf(g_log, "=== Lark HUD log ===\n");
@@ -502,7 +516,13 @@ static void font_load(void)
     FILE *f = fopen(FONT_FILE_A, "r");
     int v = -1;
     if (!f) f = fopen(FONT_FILE_B, "r");
+    if (!f) f = fopen(FONT_FILE_C, "r");
     if (f) {
+        long pos = ftell(f);
+        unsigned char bom[3];
+        int n = (int)fread(bom, 1, 3, f);
+        if (!(n == 3 && bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF))
+            fseek(f, pos, SEEK_SET);
         if (fscanf(f, "%d", &v) == 1) { }
         fclose(f);
     }
@@ -522,6 +542,7 @@ static void font_save(void)
 {
     FILE *f = fopen(FONT_FILE_A, "w");
     if (!f) f = fopen(FONT_FILE_B, "w");
+    if (!f) f = fopen(FONT_FILE_C, "w");
     if (f) { fprintf(f, "%d\n", g_font_pick); fclose(f); }
 }
 
@@ -569,7 +590,13 @@ static void theme_load(void)
     FILE *f = fopen(THEME_FILE_A, "r");
     int v = 0;
     if (!f) f = fopen(THEME_FILE_B, "r");
+    if (!f) f = fopen(THEME_FILE_C, "r");
     if (f) {
+        long pos = ftell(f);
+        unsigned char bom[3];
+        int n = (int)fread(bom, 1, 3, f);
+        if (!(n == 3 && bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF))
+            fseek(f, pos, SEEK_SET);
         if (fscanf(f, "%d", &v) == 1 && v >= 0 && v < THEME_COUNT) g_theme = v;
         fclose(f);
     }
@@ -579,6 +606,7 @@ static void theme_save(void)
 {
     FILE *f = fopen(THEME_FILE_A, "w");
     if (!f) f = fopen(THEME_FILE_B, "w");
+    if (!f) f = fopen(THEME_FILE_C, "w");
     if (f) { fprintf(f, "%d\n", g_theme); fclose(f); }
 }
 
@@ -587,6 +615,7 @@ static void odo_save(void)
     FILE *f = fopen(ODO_FILE_A, "w");
     int whole, frac;
     if (!f) f = fopen(ODO_FILE_B, "w");
+    if (!f) f = fopen(ODO_FILE_C, "w");
     if (!f) { logf_("ODO SAVE FAIL\n"); return; }
     whole = (int)g_odo_km;
     frac  = (int)((g_odo_km - whole) * 1000.0);
@@ -601,7 +630,13 @@ static void odo_load(void)
     FILE *f = fopen(ODO_FILE_A, "r");
     double v = 0.0;
     if (!f) f = fopen(ODO_FILE_B, "r");
+    if (!f) f = fopen(ODO_FILE_C, "r");
     if (f) {
+        long pos = ftell(f);
+        unsigned char bom[3];
+        int n = (int)fread(bom, 1, 3, f);
+        if (!(n == 3 && bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF))
+            fseek(f, pos, SEEK_SET);
         if (fscanf(f, "%lf", &v) == 1 && v >= 0.0 && v < 1e7) g_odo_km = v;
         fclose(f);
     }
