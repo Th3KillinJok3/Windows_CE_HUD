@@ -1,10 +1,12 @@
 /*
- * hud.c — predkosciomierz + licznik km + wysokosc
- * Windows CE 5.0 / ARM (Lark FreeBird 35.7, 320x240)
- * Wersja MAX: GPD0 power-on, SiRF+MTK wakeup, binarny SiRF,
- * skan COM0-9, log co minute, X, 3 motywy, pixlowaty font.
+ * hud.c - speedometer + odometer + altitude HUD
+ * Windows CE 5.0 / ARM (Lark FreeBird 35.7 - 480x272, 42.1 - 480x272)
  *
- * Kompilacja (CeGCC 9.3.0):
+ * Features: GPD0 power-on, SiRF+MTK wakeup, binary SiRF, COM0-9 scan,
+ * heartbeat log every 60 s, X close button, 4 themes, pixel fonts,
+ * metric/imperial units and 10 UI languages (see hud.ini).
+ *
+ * Build (CeGCC 9.3.0):
  *   arm-mingw32ce-gcc -O2 -Wall -DUNICODE -D_UNICODE -o hud.exe hud.c \
  *       -lcoredll -Wl,-subsystem,windows
  */
@@ -24,6 +26,8 @@
 #define THEME_FILE_B  "\\SDMMC\\hud_theme.txt"
 #define FONT_FILE_A   "\\Storage Card\\hud_font.txt"
 #define FONT_FILE_B   "\\SDMMC\\hud_font.txt"
+#define INI_FILE_A    "\\Storage Card\\hud.ini"
+#define INI_FILE_B    "\\SDMMC\\hud.ini"
 
 #define FIXED_PORT    L"COM2:"
 #define FIXED_PORT2   L"COM7:"
@@ -39,8 +43,15 @@ typedef struct {
     COLORREF accent, accentD, warn, warnBg, err, errBg, btn, btnLine;
 } Theme;
 
-static const Theme THEMES[3] = {
-    /* 0 CZERWONY (default) - ciemne tlo, czerwony akcent, jasne cyfry */
+/* Theme 0 - VERSO: red overlay taken from the Toyota Verso 2017
+ * instrument cluster (orange glow) recoloured to red. Dark, high
+ * contrast, soft red halo around the digits. */
+static const Theme THEMES[4] = {
+    { RGB(8,4,6), RGB(30,10,14), RGB(96,18,26), RGB(255,86,72),
+      RGB(150,60,58), RGB(255,34,34), RGB(120,12,16),
+      RGB(255,150,40), RGB(70,36,6), RGB(255,80,60), RGB(80,10,10),
+      RGB(46,12,16), RGB(140,28,34) },
+    /* 1 CZERWONY - dark background, red accent, bright digits */
     { RGB(12,10,11), RGB(24,18,20), RGB(52,32,36), RGB(245,235,236),
       RGB(155,125,130), RGB(255,64,64), RGB(70,16,18),
       RGB(255,196,64), RGB(46,34,8), RGB(255,120,120), RGB(56,14,14),
@@ -54,8 +65,11 @@ static const Theme THEMES[3] = {
       RGB(251,191,36), RGB(42,34,12), RGB(248,113,113), RGB(42,26,26),
       RGB(60,32,32), RGB(120,60,60) },
 };
-static const WCHAR *THEME_NAMES[3] = { L"CZERWONY", L"AMBER", L"NIEBIESKI" };
-static int g_theme = 0;
+#define THEME_COUNT 4
+static const WCHAR *THEME_NAMES[THEME_COUNT] = {
+    L"VERSO", L"CZERWONY", L"AMBER", L"NIEBIESKI"
+};
+static int g_theme = 0;          /* 0 = VERSO (default) */
 #define TBG     (THEMES[g_theme].bg)
 #define TPANEL  (THEMES[g_theme].panel)
 #define TLINE   (THEMES[g_theme].line)
@@ -70,7 +84,193 @@ static int g_theme = 0;
 #define TBTN    (THEMES[g_theme].btn)
 #define TBTNL   (THEMES[g_theme].btnLine)
 
-/* ============ LOG (bez bufora) ============ */
+
+/* forward declaration: the ini reader logs before logf_() is defined */
+static void logf_(const char *fmt, ...);
+
+/* ============ UNITS + LANGUAGES ============ */
+/* Everything is stored internally in metric (km/h, km, m).
+ * Imperial is only a display conversion: mph, miles, feet. */
+static int g_imperial = 0;   /* 0 = metric, 1 = imperial (hud.ini: units=imperial) */
+
+/* Language ids. Auto-detected from the OS locale at startup, overridable
+ * with lang=xx in hud.ini. */
+enum { LANG_PL=0, LANG_EN, LANG_DE, LANG_ES, LANG_FR, LANG_IT,
+       LANG_RU, LANG_NL, LANG_PT, LANG_CZ, LANG_COUNT };
+
+static const char *LANG_CODES[LANG_COUNT] = {
+    "pl","en","de","es","fr","it","ru","nl","pt","cz"
+};
+
+/* String ids - keep in sync with STR_TABLE columns. */
+enum {
+    S_ODO=0, S_ALT, S_MAX, S_RESET, S_THEME, S_FONT,
+    S_SCAN, S_NOGPS, S_WAITFIX, S_SAT, S_KMH, S_MPH, S_M, S_FT,
+    S_KM, S_MI, S_COUNT
+};
+
+/* Every row has S_COUNT entries; order must match the enum above. */
+static const WCHAR *STR_TABLE[LANG_COUNT][S_COUNT] = {
+ /* PL */ { L"LICZNIK", L"WYSOKOSC", L"max", L"RESET", L"WYGLAD", L"FONT",
+            L"szukam portu GPS...", L"BRAK GPS - retry 5 s", L"czekam na fix",
+            L"sat", L"km/h", L"mph", L"m", L"ft", L"km", L"mi" },
+ /* EN */ { L"ODOMETER", L"ALTITUDE", L"max", L"RESET", L"THEME", L"FONT",
+            L"scanning GPS ports...", L"NO GPS - retry 5 s", L"waiting for fix",
+            L"sat", L"km/h", L"mph", L"m", L"ft", L"km", L"mi" },
+ /* DE */ { L"KILOMETER", L"HOEHE", L"max", L"RESET", L"DESIGN", L"SCHRIFT",
+            L"suche GPS-Port...", L"KEIN GPS - 5 s", L"warte auf Fix",
+            L"sat", L"km/h", L"mph", L"m", L"ft", L"km", L"mi" },
+ /* ES */ { L"CUENTAKM", L"ALTITUD", L"max", L"RESET", L"TEMA", L"FUENTE",
+            L"buscando puerto GPS...", L"SIN GPS - 5 s", L"esperando fix",
+            L"sat", L"km/h", L"mph", L"m", L"ft", L"km", L"mi" },
+ /* FR */ { L"COMPTEUR", L"ALTITUDE", L"max", L"RESET", L"THEME", L"POLICE",
+            L"recherche port GPS...", L"PAS DE GPS - 5 s", L"attente du fix",
+            L"sat", L"km/h", L"mph", L"m", L"ft", L"km", L"mi" },
+ /* IT */ { L"CONTACHILOM.", L"ALTITUDINE", L"max", L"RESET", L"TEMA", L"CARATTERE",
+            L"cerco porta GPS...", L"NO GPS - 5 s", L"attendo il fix",
+            L"sat", L"km/h", L"mph", L"m", L"ft", L"km", L"mi" },
+ /* RU */ { L"ODOMETR", L"VYSOTA", L"max", L"SBROS", L"TEMA", L"SHRIFT",
+            L"poisk porta GPS...", L"NET GPS - 5 s", L"zhdu fix",
+            L"sat", L"km/h", L"mph", L"m", L"ft", L"km", L"mi" },
+ /* NL */ { L"KILOMETER", L"HOOGTE", L"max", L"RESET", L"THEMA", L"LETTER",
+            L"GPS-poort zoeken...", L"GEEN GPS - 5 s", L"wacht op fix",
+            L"sat", L"km/h", L"mph", L"m", L"ft", L"km", L"mi" },
+ /* PT */ { L"ODOMETRO", L"ALTITUDE", L"max", L"RESET", L"TEMA", L"FONTE",
+            L"procurando porta GPS...", L"SEM GPS - 5 s", L"aguardando fix",
+            L"sat", L"km/h", L"mph", L"m", L"ft", L"km", L"mi" },
+ /* CZ */ { L"POCITADLO", L"VYSKA", L"max", L"RESET", L"VZHLED", L"FONT",
+            L"hledam port GPS...", L"ZADNE GPS - 5 s", L"cekam na fix",
+            L"sat", L"km/h", L"mph", L"m", L"ft", L"km", L"mi" },
+};
+
+static int g_lang = LANG_PL;
+
+/* Shortcut: localized string by id. */
+static const WCHAR *T(int id)
+{
+    if (id < 0 || id >= S_COUNT) return L"";
+    return STR_TABLE[g_lang][id];
+}
+
+/* Map a 2-letter code to a language id; -1 when unknown. */
+static int lang_from_code(const char *c)
+{
+    int i;
+    char lo[3];
+    if (!c || !c[0]) return -1;
+    lo[0] = (char)((c[0] >= 'A' && c[0] <= 'Z') ? c[0] + 32 : c[0]);
+    lo[1] = (char)((c[1] >= 'A' && c[1] <= 'Z') ? c[1] + 32 : c[1]);
+    lo[2] = 0;
+    for (i = 0; i < LANG_COUNT; i++)
+        if (strcmp(lo, LANG_CODES[i]) == 0) return i;
+    return -1;
+}
+
+/* ============ hud.ini ============ */
+/* Format, one key per line, ';' or '#' starts a comment:
+ *     units = metric | imperial
+ *     lang  = pl | en | de | es | fr | it | ru | nl | pt | cz
+ *     theme = 0..3
+ */
+static void ini_apply_line(const char *line)
+{
+    char key[32], val[48];
+    const char *p = line;
+    int k = 0, v = 0;
+
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == 0 || *p == ';' || *p == '#' || *p == '[') return;
+
+    while (*p && *p != '=' && *p != ' ' && *p != '\t' && k < 31) key[k++] = *p++;
+    key[k] = 0;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '=') p++;
+    while (*p == ' ' || *p == '\t') p++;
+    while (*p && *p != '\r' && *p != '\n' && *p != ';' && *p != '#' && v < 47) {
+        if (*p != ' ' && *p != '\t') { val[v++] = *p; }
+        p++;
+    }
+    val[v] = 0;
+    if (k == 0 || v == 0) return;
+
+    if (_stricmp(key, "units") == 0) {
+        g_imperial = (_stricmp(val, "imperial") == 0 || _stricmp(val, "mi") == 0) ? 1 : 0;
+        logf_("ini: units=%s\n", g_imperial ? "imperial" : "metric");
+    } else if (_stricmp(key, "lang") == 0 || _stricmp(key, "language") == 0) {
+        int li = lang_from_code(val);
+        if (li >= 0) { g_lang = li; logf_("ini: lang=%s\n", val); }
+        else logf_("ini: nieznany jezyk '%s'\n", val);
+    } else if (_stricmp(key, "theme") == 0) {
+        int t = atoi(val);
+        if (t >= 0 && t < THEME_COUNT) { g_theme = t; logf_("ini: theme=%d\n", t); }
+    }
+}
+
+static void ini_load(void)
+{
+    FILE *f = fopen(INI_FILE_A, "r");
+    char line[128];
+    if (!f) f = fopen(INI_FILE_B, "r");
+    if (!f) { logf_("hud.ini brak - metric + jezyk z systemu\n"); return; }
+    while (fgets(line, sizeof(line), f)) ini_apply_line(line);
+    fclose(f);
+}
+
+/* Locale from the OS: WinCE GetUserDefaultLCID / GetSystemDefaultLCID
+ * primary language id. Fallback when hud.ini has no lang= key. */
+static void lang_detect(void)
+{
+    LCID lcid = GetUserDefaultLCID();
+    if (!lcid) lcid = GetSystemDefaultLCID();
+    switch (lcid & 0xFF) {
+    case 0x15: g_lang = LANG_PL; break;   /* Polish        */
+    case 0x09: g_lang = LANG_EN; break;   /* English       */
+    case 0x07: g_lang = LANG_DE; break;   /* German        */
+    case 0x0A: g_lang = LANG_ES; break;   /* Spanish       */
+    case 0x0C: g_lang = LANG_FR; break;   /* French        */
+    case 0x10: g_lang = LANG_IT; break;   /* Italian       */
+    case 0x19: g_lang = LANG_RU; break;   /* Russian       */
+    case 0x13: g_lang = LANG_NL; break;   /* Dutch         */
+    case 0x16: g_lang = LANG_PT; break;   /* Portuguese    */
+    case 0x05: g_lang = LANG_CZ; break;   /* Czech         */
+    default:   g_lang = LANG_EN; break;
+    }
+    logf_("jezyk z systemu: %s\n", LANG_CODES[g_lang]);
+}
+
+/* ============ UNIT CONVERSION ============ */
+#define KMH_TO_MPH  0.6213712
+#define M_TO_FT     3.2808399
+#define KM_TO_MI    0.6213712
+
+/* Speed for display, already in the active unit. */
+static int speed_disp(void)
+{
+    if (!g_imperial) return g_speed_kmh;
+    return (int)(g_speed_kmh * KMH_TO_MPH + 0.5);
+}
+static int speed_max_disp(void)
+{
+    if (!g_imperial) return g_speed_max;
+    return (int)(g_speed_max * KMH_TO_MPH + 0.5);
+}
+/* Odometer in the active unit, whole part + one decimal. */
+static void odo_disp(int *whole, int *frac)
+{
+    double v = g_imperial ? (g_odo_km * KM_TO_MI) : g_odo_km;
+    int w = (int)v;
+    int f = (int)((v - w) * 10.0);
+    if (f < 0) f = 0;
+    if (f > 9) f = 9;
+    *whole = w; *frac = f;
+}
+static int alt_disp(void)
+{
+    if (!g_imperial) return g_alt_m;
+    return (int)(g_alt_m * M_TO_FT + 0.5);
+}
+
+/* ============ LOG (no buffering) ============ */
 static FILE *g_log = NULL;
 
 static void log_open(void)
@@ -141,7 +341,7 @@ static DWORD  g_last_tick;
 /* ============ FONTY (pixlowate) ============ */
 static HFONT g_fSpeed, g_fUnit, g_fLabel, g_fVal, g_fBtn, g_fTop;
 
-/* ============ KOMUNIKATY NMEA (kolejka na pasek statusu) ============ */
+/* ============ NMEA SENTENCES (queue for the status bar) ============ */
 #define MSG_N     8
 #define MSG_LEN   72
 static char  g_msgs[MSG_N][MSG_LEN];
@@ -182,7 +382,7 @@ static void cks_bad_push(const char *line)
     if (g_cks_bad_count < MSG_N) g_cks_bad_count++;
 }
 
-/* ============ MATEMATYKA (bez libc sin/cos) ============ */
+/* ============ MATH (no libc sin/cos) ============ */
 static double deg2rad(double d) { return d * PI_D / 180.0; }
 
 static double my_cos(double x)
@@ -225,16 +425,16 @@ static void w2a(const WCHAR *src, char *dst, int maxlen)
 }
 
 /* ============ WYBOR FONTU ============ */
-/* Sciezki do pliku z fontem Minecraft (karta SD albo Windows) */
+/* Search paths for the Minecraft TTF (SD card or \Windows) */
 #define FONT_TTF_A    "\\Storage Card\\Minecraft.ttf"
 #define FONT_TTF_B    "\\SDMMC\\Minecraft.ttf"
 #define FONT_TTF_C    "\\Windows\\Minecraft.ttf"
 
-static int g_minecraft_on = 0;   /* 1 = Minecraft.ttf zaladowany przez AddFontResourceW */
+static int g_minecraft_on = 0;   /* 1 = Minecraft.ttf loaded via AddFontResourceW */
 
 static const WCHAR *g_font_candidates[] = {
     L"Minecraft",       /* z pliku Minecraft.ttf (AddFontResourceW) */
-    L"Terminal",        /* pixelowy bitmapowy, jest w kazdym WinCE */
+    L"Terminal",        /* pixel bitmap font, present on every WinCE */
     L"Fixedsys",
     L"MS Sans Serif",
     L"Tahoma",
@@ -255,7 +455,7 @@ static void font_load(void)
         fclose(f);
     }
     if (v >= 0 && v < FONT_COUNT) {
-        /* sprawdz, czy wybrany font naprawde jest w systemie */
+        /* make sure the saved font actually exists in the system */
         if (font_works(g_font_candidates[v], -16, v)) {
             g_font_pick = v;
             logf_("font z pliku: %S (idx=%d)\n", g_font_candidates[v], v);
@@ -284,14 +484,14 @@ static void font_resolve(void)
     logf_("font wybrany: %S (idx=%d)\n", g_font_candidates[g_font_pick], g_font_pick);
 }
 
-/* ============ MOTYW / LICZNIK pliki ============ */
+/* ============ THEME / ODOMETER files ============ */
 static void theme_load(void)
 {
     FILE *f = fopen(THEME_FILE_A, "r");
     int v = 0;
     if (!f) f = fopen(THEME_FILE_B, "r");
     if (f) {
-        if (fscanf(f, "%d", &v) == 1 && v >= 0 && v < 3) g_theme = v;
+        if (fscanf(f, "%d", &v) == 1 && v >= 0 && v < THEME_COUNT) g_theme = v;
         fclose(f);
     }
 }
@@ -381,7 +581,7 @@ static void parse_gga(char **f, int n)
     if (n < 10) return;
     g_sats = atoi(f[7]);
     if (f[8] && f[8][0]) {
-        /* HDOP w formacie "0.9" -> 9 */
+        /* HDOP like "0.9" -> 9 */
         int w = atoi(f[8]);
         int d = 0;
         const char *q = f[8];
@@ -400,7 +600,7 @@ static void parse_gga(char **f, int n)
             g_alt_m = atoi(f[9]);
             g_alt_ok = 1;
         }
-        /* pozycja z GGA jako zapas, gdy RMC jej nie podaje */
+        /* position from GGA as a fallback when RMC does not carry it */
         if (n > 5 && f[2][0] && f[4][0]) {
             double rawlat = atof(f[2]);
             double rawlon = atof(f[4]);
@@ -412,7 +612,7 @@ static void parse_gga(char **f, int n)
             if (f[5][0]=='W') lon = -lon;
             if (lat > -90.0 && lat < 90.0 && lon > -180.0 && lon < 180.0) {
                 g_lat = lat; g_lon = lon;
-                g_course_ok = g_course_ok;   /* bez zmian */
+                g_course_ok = g_course_ok;   /* unchanged */
             }
         }
     } else {
@@ -429,7 +629,7 @@ static void parse_gsv(char **f, int n)
     }
 }
 
-/* Suma kontrolna NMEA: XOR miedzy '$' i '*'. Zwraca 1 = OK. */
+/* NMEA checksum: XOR between '$' and '*'. Returns 1 = OK. */
 static int nmea_cks_ok(const char *line)
 {
     const char *a = line;
@@ -437,7 +637,7 @@ static int nmea_cks_ok(const char *line)
     unsigned char cs = 0;
     if (*a == '$') a++;
     star = strchr(a, '*');
-    if (!star) return -1;            /* brak sumy - przyjmujemy */
+    if (!star) return -1;            /* no checksum - accept it */
     while (a < star) cs ^= (unsigned char)*a++;
     {
         int hi = star[1], lo = star[2], v;
@@ -481,13 +681,13 @@ static void nmea_line(char *line)
     if (line[0] != '$') return;
 
     cks = nmea_cks_ok(line);
-    if (cks == 0) {                       /* suma sie nie zgadza - odrzuc, ale zapisz */
+    if (cks == 0) {                       /* checksum mismatch - reject, but log it */
         cks_bad_push(line);
         g_nmea_count++;
         return;
     }
 
-    /* kopia do kolejki komunikatow (przed zniszczeniem przez split_nmea) */
+    /* copy into the message queue (before split_nmea destroys the buffer) */
     msg_push(line);
 
     n = split_nmea(line, f, 24);
@@ -501,7 +701,7 @@ static void nmea_line(char *line)
     else if (!strcmp(type,"GSA")) parse_gsa(f,n);
     else if (!strcmp(type,"VTG")) {
         /* $GPVTG,course,T,courseM,M,speedN,N,speedK,K
-           f[7] = predkosc w km/h - niezalezna od RMC */
+           f[7] = speed in km/h - independent of RMC */
         if (n > 7 && f[7] && f[7][0]) {
             double k = atof(f[7]);
             int kmh = (int)(k + 0.5);
@@ -517,7 +717,7 @@ static void nmea_line(char *line)
     }
     else if (!strcmp(type,"GNS")) {
         if (n >= 10 && f[9] && f[9][0]) { g_alt_m = atoi(f[9]); g_alt_ok = 1; }
-        /* GNS f[6] = tryb: A/D/P = autonomiczny/rtozniczkowy/precyzyjny */
+        /* GNS f[6] = mode: A/D/P = autonomous/differential/precise */
         if (n > 6 && f[6] && (f[6][0]=='A' || f[6][0]=='D' || f[6][0]=='P'))
             g_fixmode = 3;
     }
@@ -577,7 +777,7 @@ static void send_body(HANDLE h, const char *body)
 static void wakeup_for_baud(HANDLE h, DWORD baud)
 {
     (void)h; (void)baud;
-    /* NIC NIE WYSYLAMY: urzadzenie jest juz ustawione na NMEA 4800.
+    /* NO TX AT ALL: the receiver is already configured for NMEA 4800.
      * Wysylanie PSRF/PMTK moze przelaczyc chip w tryb binarny i zabic port. */
     logf_("  (no TX - port already NMEA 4800)\n");
 }
@@ -635,7 +835,7 @@ static HANDLE open_port(const WCHAR *port, DWORD baud, int do_wakeup)
 }
 
 
-/* ============ DIAGNOSTYKA: porty COM w rejestrze ============ */
+/* ============ DIAGNOSTICS: COM ports from the registry ============ */
 static void log_com_registry(void)
 {
     static const WCHAR *keys[] = {
@@ -688,7 +888,7 @@ static DWORD WINAPI gps_thread(LPVOID param)
         if (FIXED_PORT[0] && !ok) {
             HANDLE h = open_port(FIXED_PORT, FIXED_BAUD ? FIXED_BAUD : CBR_4800, 1);
             if (h != INVALID_HANDLE_VALUE) {
-                /* sprawdz czy naprawde leca dane zanim uznasz port za dobry */
+                /* make sure data is really flowing before accepting the port */
                 int probe_ok = 0, prxn = 0;
                 DWORD pdl = GetTickCount() + 3000;
                 DWORD pgot;
@@ -772,7 +972,7 @@ static DWORD WINAPI gps_thread(LPVOID param)
                 h = open_port(g_ports[pi], g_bauds[bi], 0);
                 if (h == INVALID_HANDLE_VALUE) continue;
 
-                /* FAZA A: nasluch 1.5 s BEZ wysylania czegokolwiek */
+                /* PHASE A: listen for 1.5 s WITHOUT transmitting anything */
                 rxn = 0;
                 deadline = GetTickCount() + 1500;
                 while (GetTickCount() < deadline && g_running && !saw) {
@@ -811,7 +1011,7 @@ static DWORD WINAPI gps_thread(LPVOID param)
                     }
                 }
 
-                /* FAZA B: cisza -> wyslij wakeup i nasluchuj jeszcze 2.5 s */
+                /* PHASE B: silence -> send wakeup and listen 2.5 s more */
                 if (!saw && !sawbin) {
                     wakeup_for_baud(h, g_bauds[bi]);
                     deadline = GetTickCount() + 2500;
@@ -889,7 +1089,7 @@ static DWORD WINAPI gps_thread(LPVOID param)
                         logf_("WATCHDOG: 10 s ciszy, reskan\n");
                         break;
                     }
-                    /* podtrzymanie: wakeup co 5 s */
+                    /* keep-alive: wakeup every 5 s */
                     if (GetTickCount() - lastwake > 5000) {
                         wakeup_for_baud(g_hGps, g_used_baud);
                         lastwake = GetTickCount();
@@ -983,9 +1183,9 @@ static void batt_read(void)
     if (!got && g_batt_pct == 0) g_batt_pct = -1;
 }
 
-/* ============ RYSOWANIE ============ */
-/* Fonty w kolejnosci preferencji: pixelowe/retro najpierw.
- * Wybieramy pierwszy, ktory system faktycznie ma. */
+/* ============ DRAWING ============ */
+/* Fonts in order of preference: pixel/retro ones first.
+ * The first one the system actually has is used. */
 
 static HFONT mkfont_face(const WCHAR *face, int size, int weight)
 {
@@ -995,7 +1195,8 @@ static HFONT mkfont_face(const WCHAR *face, int size, int weight)
     lf.lfWeight = weight;
     lf.lfCharSet = DEFAULT_CHARSET;
     lf.lfQuality = NONANTIALIASED_QUALITY;   /* zero wygladzania = ostry pixel */
-    lf.lfPitchAndFamily = DEFAULT_PITCH | FF_DONTCARE; /* nie wymuszaj FIXED - proporcjonalne TTF (Minecraft/Tahoma/Arial) inaczej ladowalyby jako ten sam fallback */
+    lf.lfPitchAndFamily = DEFAULT_PITCH | FF_DONTCARE; /* do not force FIXED - proportional TTF (Minecraft/Tahoma/Arial)
+                           * would otherwise resolve to the same fallback face */
     wcsncpy(lf.lfFaceName, face, 31);
     lf.lfFaceName[31] = 0;
     return CreateFontIndirectW(&lf);
@@ -1003,11 +1204,11 @@ static HFONT mkfont_face(const WCHAR *face, int size, int weight)
 
 static int g_font_tested[8];
 static int g_font_ok[8];
-/* uwaga: FONT_COUNT = 7, cache 8 wystarczy */
+/* note: FONT_COUNT = 7, a cache of 8 is enough */
 
 static int font_works(const WCHAR *face, int size, int idx)
 {
-    /* idx 0 = Minecraft: nie cachuj, bo dostepnosc zmienia sie
+    /* idx 0 = Minecraft: do not cache, availability changes
      * po AddFontResourceW (plik moze pojawic sie / zniknac). */
     if (idx != 0 && idx >= 0 && idx < 8 && g_font_tested[idx]) return g_font_ok[idx];
     HFONT f = mkfont_face(face, size, FW_BOLD);
@@ -1017,7 +1218,7 @@ static int font_works(const WCHAR *face, int size, int idx)
     if (dc) {
         old = (HFONT)SelectObject(dc, f);
         if (GetTextMetricsW(dc, &tm)) {
-            /* jesli system podmienil na inny font, nazwa sie rozni */
+            /* if the system substituted another font, the name differs */
             WCHAR real[32];
             if (GetTextFaceW(dc, 32, real) > 0) {
                 if (_wcsicmp(real, face) == 0) ok = 1;
@@ -1120,7 +1321,7 @@ static void odo_tick(void)
     g_last_tick = now;
 }
 
-/* ============ LAYOUT GUZIKOW (wspolny dla rysowania i dotyku) ============
+/* ============ BUTTON LAYOUT (shared by drawing and touch) ============
  * Przycisk X jest w prawym GORNYM rogu, wiec pasek statusu konczy sie przed nim.
  * Guziki FONT / WYGLAD / RESET stoja w JEDNYM rzedzie przy DOLNEJ krawedzi. */
 #define BTN_H    22
@@ -1147,7 +1348,7 @@ static void draw_screen(HDC dc, int W, int H)
 
     fill(dc,0,0,W,H,TBG);
 
-    /* ---------- PASEK STATUSU (przewijany) ---------- */
+    /* ---------- STATUS BAR (scrolling) ---------- */
     {
         int px = 6;                       /* lewa krawedz tekstu */
         int ph = TOP_H;
@@ -1160,14 +1361,14 @@ static void draw_screen(HDC dc, int W, int H)
 
         fill(dc, 0, 0, W, ph, bg);
 
-        /* napis paska: albo status, albo ostatni komunikat NMEA (przewijany) */
+        /* bar text: either status or the last NMEA sentence (scrolling) */
         {
             WCHAR wbuf[160];
 
-            /* prawa strona: bateria + sygnal - zawsze widoczne */
+            /* right side: battery + signal, always visible */
             {
                 int rxp = W - X_W - 4;
-                /* sygnal: paski HDOP */
+                /* signal: HDOP bars */
                 {
                     int bars = 0, i;
                     COLORREF sc;
@@ -1187,7 +1388,7 @@ static void draw_screen(HDC dc, int W, int H)
                     }
                     rxp -= 32;
                 }
-                /* bateria: malutka ikona + % */
+                /* battery: tiny icon + percent */
                 if (g_batt_pct >= 0) {
                     COLORREF bc = g_batt_ac ? TAC : (g_batt_pct < 20 ? TER : TTEXT);
                     WCHAR tw[8];
@@ -1206,17 +1407,17 @@ static void draw_screen(HDC dc, int W, int H)
             }
             if (avail < 40) avail = 40;
 
-            /* tresc: priorytetem status portu, potem ostatni komunikat */
+            /* content: port status first, then the last sentence */
             if (g_scanning)
-                wcscpy(wbuf, L"szukam portu GPS...");
+                wcscpy(wbuf, T(S_SCAN));
             else if (g_probe_result == -1)
-                wcscpy(wbuf, L"BRAK GPS - retry 5 s");
+                wcscpy(wbuf, T(S_NOGPS));
             else if (gpsOk) {
                 WCHAR wtmp[40];
                 wsprintfW(wtmp, L"%s %d %db %dsat ", g_used_port,
                           (int)g_used_baud, g_sats);
                 wcscpy(wbuf, wtmp);
-                /* doklej ostatni komunikat NMEA - to on sie przewija */
+                /* append the last NMEA sentence - that is what scrolls */
                 if (g_msg_count > 0) {
                     WCHAR wm[MSG_LEN + 2];
                     int i;
@@ -1226,8 +1427,8 @@ static void draw_screen(HDC dc, int W, int H)
                     wcscat(wbuf, wm);
                 }
             } else {
-                wsprintfW(wbuf, L"%s %d - czekam na fix %d/%d",
-                          g_used_port, (int)g_used_baud, g_sats, g_sats_view);
+                wsprintfW(wbuf, L"%s %d - %s %d/%d",
+                          g_used_port, (int)g_used_baud, T(S_WAITFIX), g_sats, g_sats_view);
                 if (g_msg_count > 0) {
                     WCHAR wm[MSG_LEN + 2];
                     int i;
@@ -1239,7 +1440,7 @@ static void draw_screen(HDC dc, int W, int H)
                 }
             }
 
-            /* przewijanie tylko gdy tekst nie miesci sie w dostepnej szerokosci */
+            /* scroll only when the text does not fit the available width */
             {
                 int tw = text_w(dc, wbuf, g_fTop);
                 int off = 0;
@@ -1257,12 +1458,12 @@ static void draw_screen(HDC dc, int W, int H)
             }
         }
 
-        /* guzik X - prawy gorny rog, pelna wysokosc paska */
+        /* X button - top right corner, full bar height */
         fill(dc, W - X_W, 0, X_W, ph, TERBG);
         text_center(dc, W - X_W / 2, (ph - 14) / 2 + 1, L"X", TER, g_fBtn);
     }
 
-    /* ---------- PREDKOSC ---------- */
+    /* ---------- SPEED ---------- */
     if (gpsOk) wsprintfW(buf,L"%d",g_speed_kmh);
     else wcscpy(buf,L"--");
     cx=W/2; spY=TOP_H + 6;
@@ -1280,7 +1481,7 @@ static void draw_screen(HDC dc, int W, int H)
         text_at(dc, x0 + wnum + gap, yUnit, unit, TDIM, g_fUnit);
     }
     {
-        /* kompas (lewo) + predkosc max (prawo) */
+        /* compass (left) + max speed (right) */
         static const WCHAR *DIRS[8] = { L"N",L"NE",L"E",L"SE",L"S",L"SW",L"W",L"NW" };
         WCHAR cb[40];
         int cdx = (g_course + 22) / 45;
@@ -1296,47 +1497,49 @@ static void draw_screen(HDC dc, int W, int H)
         text_center(dc, W/2 + 70, yrow, cb, TDIM, g_fLabel);
     }
 
-    /* ---------- PANELE: licznik + wysokosc (nad rzedem guzikow) ---------- */
+    /* ---------- PANELS: odometer + altitude (above the button row) ---------- */
     {
         int panel_h = 46;
         int panel_by = H - BTN_H - BTN_R - 8 - panel_h;
         bw=(W-18)/2; bh=panel_h; by=panel_by;
 
         round_rect(dc,6,by,bw,bh,8,TPANEL,TLINE);
-        text_at(dc,14,by+4,L"LICZNIK",TDIM,g_fLabel);
-        odo_w=(int)g_odo_km;
-        odo_f=(int)((g_odo_km-odo_w)*10.0);
-        if (odo_f<0) odo_f=0; if (odo_f>9) odo_f=9;
-        wsprintfW(buf,L"%d.%d km",odo_w,odo_f);
+        text_at(dc,14,by+4,T(S_ODO),TDIM,g_fLabel);
+        odo_disp(&odo_w, &odo_f);
+        wsprintfW(buf,L"%d.%d %s",odo_w,odo_f,
+                  g_imperial ? T(S_MI) : T(S_KM));
         text_at(dc,14,by+20,buf,TAC,g_fVal);
 
         round_rect(dc,12+bw,by,bw,bh,8,TPANEL,TLINE);
-        text_at(dc,20+bw,by+4,L"WYSOKOSC",TDIM,g_fLabel);
-        if (gpsOk && g_alt_ok) wsprintfW(buf,L"%d m",g_alt_m);
-        else if (gpsOk) wcscpy(buf,L"--- m");
-        else wcscpy(buf,L"-- m");
+        text_at(dc,20+bw,by+4,T(S_ALT),TDIM,g_fLabel);
+        {
+            const WCHAR *au = g_imperial ? T(S_FT) : T(S_M);
+            if (gpsOk && g_alt_ok) wsprintfW(buf,L"%d %s",alt_disp(),au);
+            else if (gpsOk)        wsprintfW(buf,L"--- %s",au);
+            else                   wsprintfW(buf,L"-- %s",au);
+        }
         text_at(dc,20+bw,by+20,buf,gpsOk?TTEXT:TDIM,g_fVal);
     }
 
-    /* ---------- RZAD GUZIKOW przy dolnej krawedzi ---------- */
+    /* ---------- BUTTON ROW at the bottom edge ---------- */
     {
         int brw, brx, bry;
         btn_row(W, H, &brw, &brx, &bry);
 
         /* RESET */
         round_rect(dc,brx,bry,brw,BTN_H,BTN_R,TBTN,TBTNL);
-        text_center(dc,brx+brw/2,bry+3,L"RESET",TER,g_fBtn);
+        text_center(dc,brx+brw/2,bry+3,T(S_RESET),TER,g_fBtn);
 
-        /* WYGLAD */
+        /* THEME */
         round_rect(dc,brx+brw+BTN_GAP,bry,brw,BTN_H,BTN_R,TBTN,TBTNL);
-        text_center(dc,brx+brw+BTN_GAP+brw/2,bry+3,L"WYGLAD",TTEXT,g_fBtn);
+        text_center(dc,brx+brw+BTN_GAP+brw/2,bry+3,T(S_THEME),TTEXT,g_fBtn);
 
         /* FONT */
         {
             WCHAR fb[40];
             int fx = brx + (brw + BTN_GAP) * 2;
             font_resolve();
-            wsprintfW(fb,L"FONT:%s", g_font_candidates[g_font_pick]);
+            wsprintfW(fb,L"%s:%s", T(S_FONT), g_font_candidates[g_font_pick]);
             round_rect(dc,fx,bry,brw,BTN_H,BTN_R,TBTN,TBTNL);
             {
                 HRGN rgn = CreateRectRgn(fx+2, bry, fx+brw-2, bry+BTN_H);
@@ -1357,9 +1560,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     switch (msg) {
     case WM_CREATE:
         {
-            /* Sprobuj zaladowac Minecraft.ttf z karty albo z \Windows.
-             * Na WinCE wystarczy ze plik tam lezy - AddFontResourceW
-             * rejestruje go bez restartu. */
+            /* Try to load Minecraft.ttf from the card or from \Windows.
+             * On WinCE the file just has to be there - AddFontResourceW
+             * registers it without a restart. */
             const char *ttf_try[] = { FONT_TTF_A, FONT_TTF_B, FONT_TTF_C };
             int ti;
             for (ti = 0; ti < 3; ti++) {
@@ -1393,9 +1596,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         PAINTSTRUCT ps; HDC dc; RECT r;
         dc = BeginPaint(hwnd,&ps);
         GetClientRect(hwnd,&r);
-        /* Ramka dwusciankowa: rysujemy CALY ekran do pamieci i wklejamy
-         * jednym BitBlt. Bez tego kazdy FillRect/DrawText trafial na ekran
-         * osobno i widac bylo migotanie (brak podwojnego buforowania). */
+        /* Double buffering: draw the WHOLE screen into memory, then blit
+         * it in one BitBlt. Without this every FillRect/DrawText went to
+         * the screen separately and the result flickered. */
         {
             HDC mem = CreateCompatibleDC(dc);
             if (mem) {
@@ -1423,7 +1626,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         int brw, brx, bry;
         GetClientRect(hwnd,&r);
 
-        /* X - prawy gorny rog, cala wysokosc paska statusu */
+        /* X - top right corner, full status bar height */
         if (x >= r.right - X_W && y < TOP_H) {
             logf_("X: zamykam\n");
             g_running = 0;
@@ -1439,16 +1642,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (x>=brx && x<=brx+brw && y>=bry && y<=bry+BTN_H) {
             g_odo_km=0.0; g_have_last=0; g_speed_max=0;
             odo_save();
-            logf_("licznik RESET (max=0)\n");
+            logf_("RESET odometer (max=0)\n");
             InvalidateRect(hwnd,NULL,FALSE);
             return 0;
         }
         /* WYGLAD - srodkowy */
         if (x>=brx+brw+BTN_GAP && x<=brx+brw+BTN_GAP+brw
             && y>=bry && y<=bry+BTN_H) {
-            g_theme = (g_theme+1)%3;
+            g_theme = (g_theme+1)%THEME_COUNT;
             theme_save();
-            logf_("WYGLAD -> %d (%S)\n", g_theme, THEME_NAMES[g_theme]);
+            logf_("THEME -> %d (%S)\n", g_theme, THEME_NAMES[g_theme]);
             InvalidateRect(hwnd,NULL,FALSE);
             return 0;
         }
@@ -1467,7 +1670,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     }
     case WM_ERASEBKGND:
-        /* Sami malujemy caly ekran (double buffer) - system nie ma czego
+        /* We paint the whole screen ourselves (double buffer) - there is
          * zamalowywac. Bez tego widac biale/zielone migniecie pod ramka. */
         return 1;
     case WM_TIMER: {
@@ -1484,7 +1687,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
          * Teraz: odswiezamy co tick, jesli zmienila sie jakakolwiek
          * wartosc widoczna na ekranie; inaczej tylko raz na 2 s. */
         {
-            /* przewijanie paska: ruszaj tylko gdy tekst nie mieści sie w oknie */
+            /* bar scrolling: advance only when the text overflows */
             static int last_msgn = -1;
             if (g_msg_count != last_msgn) { g_marq = 0; last_msgn = g_msg_count; }
             g_marq += 3;
@@ -1546,8 +1749,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR cmd, int show)
 
     gps_power_on();
 
-    theme_load();
-    logf_("motyw=%d\n", g_theme);
+    lang_detect();
+    ini_load();                 /* units= / lang= / theme= from hud.ini */
+    theme_load();               /* hud_theme.txt wins over ini */
+    logf_("motyw=%d units=%s lang=%s\n", g_theme,
+          g_imperial ? "imperial" : "metric", LANG_CODES[g_lang]);
 
     memset(&wc,0,sizeof(wc));
     wc.lpfnWndProc = WndProc;
