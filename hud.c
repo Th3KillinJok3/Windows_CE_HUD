@@ -43,7 +43,7 @@ typedef struct {
     COLORREF accent, accentD, warn, warnBg, err, errBg, btn, btnLine;
 } Theme;
 
-static const Theme THEMES[3] = {
+static const Theme THEMES[4] = {
     /* 0 DOTMATRIX - Toyota Verso center dot-matrix MFD */
     { RGB(2,8,4), RGB(6,20,10), RGB(10,40,18), RGB(120,255,140),
       RGB(60,160,80), RGB(80,255,100), RGB(6,30,12),
@@ -54,16 +54,20 @@ static const Theme THEMES[3] = {
       RGB(80,180,190), RGB(0,245,230), RGB(0,60,56),
       RGB(255,200,80), RGB(40,30,8), RGB(255,120,120), RGB(30,8,8),
       RGB(6,26,28), RGB(0,120,110) },
-    /* 2 CZERWONY - classic dark red */
+    /* 2 SUBARU_XT - 1985 Subaru XT Turbo digital cluster */
+    { RGB(6,5,4), RGB(18,14,10), RGB(40,30,18), RGB(255,180,60),
+      RGB(160,120,40), RGB(255,135,10), RGB(60,28,4),
+      RGB(255,200,40), RGB(40,28,6), RGB(255,120,80), RGB(40,14,4),
+      RGB(20,14,6), RGB(80,50,16) },
+    /* 3 CZERWONY - classic dark red */
     { RGB(12,10,11), RGB(24,18,20), RGB(52,32,36), RGB(245,235,236),
       RGB(155,125,130), RGB(255,64,64), RGB(70,16,18),
       RGB(255,196,64), RGB(46,34,8), RGB(255,120,120), RGB(56,14,14),
       RGB(58,26,28), RGB(112,44,48) },
 };
 
-#define THEME_COUNT 3
 static const WCHAR *THEME_NAMES[THEME_COUNT] = {
-    L"DOTMATRIX", L"EL_GLOW", L"CZERWONY"
+    L"DOTMATRIX", L"EL_GLOW", L"SUBARU_XT", L"CZERWONY"
 };
 static int g_theme = 0;          /* 0 = VERSO (default) */
 static int g_menu_open = 0;      /* on-screen settings menu */
@@ -85,6 +89,7 @@ static int g_menu_open = 0;      /* on-screen settings menu */
 static int dotmatrix_theme(void) { return (g_theme == 0); }
 static int toyota_theme(void)   { return (g_theme == 0); }
 static int elglow_theme(void)   { return (g_theme == 1); }
+static int subaru_theme(void)   { return (g_theme == 2); }
 static int vfd_theme(void)      { return toyota_theme(); }
 
 
@@ -1912,6 +1917,224 @@ static void draw_screen(HDC dc, int W, int H)
 
     }
 
+    /* ---------- SUBARU XT (320x240) ---------- */
+    if (subaru_theme()) {
+        fill(dc, 0, 0, W, H, RGB(6,5,4));
+        /* angular cockpit bezel */
+        {
+            HPEN pen = CreatePen(PS_SOLID, 2, RGB(255,135,10));
+            HBRUSH br = CreateSolidBrush(RGB(6,5,4));
+            HPEN op = (HPEN)SelectObject(dc, pen);
+            HBRUSH ob = (HBRUSH)SelectObject(dc, br);
+            RoundRect(dc, 4, 4, W - 4, H - 34, 6, 6);
+            SelectObject(dc, op); SelectObject(dc, ob);
+            DeleteObject(pen); DeleteObject(br);
+        }
+        /* top-left speed box */
+        {
+            HPEN pen = CreatePen(PS_SOLID, 2, RGB(255,135,10));
+            HBRUSH br = CreateSolidBrush(RGB(6,5,4));
+            HPEN op = (HPEN)SelectObject(dc, pen);
+            HBRUSH ob = (HBRUSH)SelectObject(dc, br);
+            Rectangle(dc, 12, 12, 126, 58);
+            SelectObject(dc, op); SelectObject(dc, ob);
+            DeleteObject(pen); DeleteObject(br);
+            {
+                WCHAR nb[16];
+                if (gpsOk) wsprintfW(nb, L"%d", speed_disp());
+                else wcscpy(nb, L"--");
+                text_at(dc, 18, 18, nb, RGB(255,200,40), g_fSpeed);
+                text_at(dc, 18, 46, g_imperial ? T(S_MPH) : T(S_KMH), RGB(255,135,10), g_fTop);
+            }
+        }
+        /* top-right 16-step rising bar graph */
+        {
+            int spd = gpsOk ? g_speed_kmh : 0;
+            double maxv = g_imperial ? 120.0 : 180.0;
+            int filled = (int)((double)spd / maxv * 16.0 + 0.5);
+            if (filled < 0) filled = 0; if (filled > 16) filled = 16;
+            int i;
+            for (i = 0; i < 16; i++) {
+                int x = 134 + i * 11;
+                int h = 6 + i * 2;
+                int y = 58 - h;
+                COLORREF c = (i < filled) ? RGB(255,135,10) : RGB(40,30,18);
+                fill(dc, x, y, 9, h, c);
+                {
+                    HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,135,10));
+                    HPEN op = (HPEN)SelectObject(dc, pen);
+                    HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+                    Rectangle(dc, x, y, x + 9, 58);
+                    SelectObject(dc, op); SelectObject(dc, ob);
+                    DeleteObject(pen);
+                }
+            }
+        }
+        /* center highway grid */
+        {
+            int i;
+            /* perspective lines */
+            HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,135,10));
+            HPEN op = (HPEN)SelectObject(dc, pen);
+            for (i = 0; i < 6; i++) {
+                int y = 66 + i * 22;
+                int xl = 72 + i * 12;
+                int xr = W - 72 - i * 12;
+                MoveToEx(dc, xl, y, NULL); LineTo(dc, xr, y);
+            }
+            /* side rails */
+            MoveToEx(dc, 72, 66, NULL); LineTo(dc, 108, 202);
+            MoveToEx(dc, W - 72, 66, NULL); LineTo(dc, W - 108, 202);
+            SelectObject(dc, op);
+            DeleteObject(pen);
+        }
+        /* XT coupe silhouette (wireframe) */
+        {
+            HPEN pen = CreatePen(PS_SOLID, 2, RGB(255,200,40));
+            HPEN op = (HPEN)SelectObject(dc, pen);
+            HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+            /* simple coupe outline */
+            MoveToEx(dc, 134, 154, NULL);
+            LineTo(dc, 140, 118);
+            LineTo(dc, 160, 118);
+            LineTo(dc, 180, 134);
+            LineTo(dc, 186, 154);
+            LineTo(dc, 134, 154);
+            SelectObject(dc, op);
+            SelectObject(dc, ob);
+            DeleteObject(pen);
+        }
+        /* left pods: Battery, Compass, Altitude */
+        {
+            int x = 10;
+            /* battery */
+            {
+                HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,135,10));
+                HBRUSH br = CreateSolidBrush(RGB(6,5,4));
+                HPEN op = (HPEN)SelectObject(dc, pen);
+                HBRUSH ob = (HBRUSH)SelectObject(dc, br);
+                Rectangle(dc, x, 66, x + 58, 100);
+                SelectObject(dc, op); SelectObject(dc, ob);
+                DeleteObject(pen); DeleteObject(br);
+                text_at(dc, x + 4, 68, L"BAT", RGB(255,135,10), g_fTop);
+                {
+                    int batt = (g_batt_pct >= 0) ? g_batt_pct : 50;
+                    int active = batt * 8 / 100; if (active < 0) active = 0; if (active > 8) active = 8;
+                    int k, y = 80;
+                    for (k = 0; k < 8; k++) {
+                        COLORREF c = (k < active) ? RGB(255,135,10) : RGB(40,30,18);
+                        fill(dc, x + 4, y, 50, 2, c);
+                        y += 3;
+                    }
+                }
+            }
+            /* compass */
+            {
+                HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,135,10));
+                HBRUSH br = CreateSolidBrush(RGB(6,5,4));
+                HPEN op = (HPEN)SelectObject(dc, pen);
+                HBRUSH ob = (HBRUSH)SelectObject(dc, br);
+                Rectangle(dc, x, 106, x + 58, 140);
+                SelectObject(dc, op); SelectObject(dc, ob);
+                DeleteObject(pen); DeleteObject(br);
+                {
+                    WCHAR cb[40];
+                    static const WCHAR *DIRS[8] = { L"N",L"NE",L"E",L"SE",L"S",L"SW",L"W",L"NW" };
+                    int cdx = (g_course + 22) / 45;
+                    if (cdx > 7) cdx = 0;
+                    if (gpsOk && g_course_ok) wsprintfW(cb, L"%s %d", DIRS[cdx], g_course);
+                    else wcscpy(cb, L"--");
+                    text_at(dc, x + 4, 108, cb, RGB(255,200,40), g_fLabel);
+                    text_at(dc, x + 4, 124, L"HDG", RGB(255,135,10), g_fTop);
+                }
+            }
+            /* altitude */
+            {
+                HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,135,10));
+                HBRUSH br = CreateSolidBrush(RGB(6,5,4));
+                HPEN op = (HPEN)SelectObject(dc, pen);
+                HBRUSH ob = (HBRUSH)SelectObject(dc, br);
+                Rectangle(dc, x, 146, x + 58, 180);
+                SelectObject(dc, op); SelectObject(dc, ob);
+                DeleteObject(pen); DeleteObject(br);
+                {
+                    WCHAR ab[32];
+                    const WCHAR *au = g_imperial ? T(S_FT) : T(S_M);
+                    if (gpsOk && g_alt_ok) wsprintfW(ab, L"%d %s", alt_disp(), au);
+                    else if (gpsOk) wsprintfW(ab, L"--- %s", au);
+                    else wsprintfW(ab, L"-- %s", au);
+                    text_at(dc, x + 4, 148, ab, RGB(255,200,40), g_fLabel);
+                    text_at(dc, x + 4, 164, L"ALT", RGB(255,135,10), g_fTop);
+                }
+            }
+        }
+        /* right pods: GPS signal, ODO, MAX */
+        {
+            int x = W - 68;
+            /* GPS signal */
+            {
+                HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,135,10));
+                HBRUSH br = CreateSolidBrush(RGB(6,5,4));
+                HPEN op = (HPEN)SelectObject(dc, pen);
+                HBRUSH ob = (HBRUSH)SelectObject(dc, br);
+                Rectangle(dc, x, 66, x + 58, 100);
+                SelectObject(dc, op); SelectObject(dc, ob);
+                DeleteObject(pen); DeleteObject(br);
+                text_at(dc, x + 4, 68, L"GPS", RGB(255,135,10), g_fTop);
+                {
+                    int bars = 0;
+                    if (gpsOk && g_hdop10 != 9999 && g_hdop10 < 200) {
+                        if (g_hdop10 <= 10) bars = 8;
+                        else if (g_hdop10 <= 20) bars = 6;
+                        else if (g_hdop10 <= 40) bars = 4;
+                        else if (g_hdop10 <= 80) bars = 2;
+                    } else if (g_sats_view > 0) {
+                        bars = (g_sats_view >= 8) ? 6 : (g_sats_view >= 4 ? 4 : 2);
+                    }
+                    if (bars > 8) bars = 8;
+                    int k, y = 80;
+                    for (k = 0; k < 8; k++) {
+                        COLORREF c = (k < bars) ? RGB(255,135,10) : RGB(40,30,18);
+                        fill(dc, x + 4, y, 50, 2, c);
+                        y += 3;
+                    }
+                }
+            }
+            /* ODO */
+            {
+                HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,135,10));
+                HBRUSH br = CreateSolidBrush(RGB(6,5,4));
+                HPEN op = (HPEN)SelectObject(dc, pen);
+                HBRUSH ob = (HBRUSH)SelectObject(dc, br);
+                Rectangle(dc, x, 106, x + 58, 140);
+                SelectObject(dc, op); SelectObject(dc, ob);
+                DeleteObject(pen); DeleteObject(br);
+                {
+                    int ow, of;
+                    odo_disp(&ow, &of);
+                    WCHAR obuf[32];
+                    wsprintfW(obuf, L"ODO %d.%d", ow, of);
+                    text_at(dc, x + 4, 108, obuf, RGB(255,200,40), g_fLabel);
+                }
+            }
+            /* MAX */
+            {
+                HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,135,10));
+                HBRUSH br = CreateSolidBrush(RGB(6,5,4));
+                HPEN op = (HPEN)SelectObject(dc, pen);
+                HBRUSH ob = (HBRUSH)SelectObject(dc, br);
+                Rectangle(dc, x, 146, x + 58, 180);
+                SelectObject(dc, op); SelectObject(dc, ob);
+                DeleteObject(pen); DeleteObject(br);
+                {
+                    WCHAR mb[32];
+                    wsprintfW(mb, L"MAX %d", speed_max_disp());
+                    text_at(dc, x + 4, 148, mb, RGB(255,200,40), g_fLabel);
+                }
+            }
+        }
+    }
+
     /* ---------- EL_GLOW CITROEN BX (320x240) ---------- */
     if (elglow_theme()) {
         /* bezel */
@@ -2135,7 +2358,7 @@ static void draw_screen(HDC dc, int W, int H)
     }
 
     /* ---------- SPEED ---------- */
-    if (!elglow_theme() && !toyota_theme()) {
+    if (!elglow_theme() && !toyota_theme() && !subaru_theme()) {
     if (gpsOk) wsprintfW(buf,L"%d",g_speed_kmh);
     else wcscpy(buf,L"--");
     /* Speed block: vertically centred in the free area between the top bar
@@ -2292,7 +2515,7 @@ static void draw_screen(HDC dc, int W, int H)
         }
     }
     }
-    if (!elglow_theme() && !toyota_theme()) {
+    if (!elglow_theme() && !toyota_theme() && !subaru_theme()) {
     {
         /* compass (left) + max speed (right) */
         static const WCHAR *DIRS[8] = { L"N",L"NE",L"E",L"SE",L"S",L"SW",L"W",L"NW" };
@@ -2310,7 +2533,7 @@ static void draw_screen(HDC dc, int W, int H)
         text_center(dc, W/2 + 70, yrow, cb, TDIM, g_fLabel);
     }
 
-    if (!elglow_theme() && !toyota_theme()) {
+    if (!elglow_theme() && !toyota_theme() && !subaru_theme()) {
     /* ---------- PANELS: odometer + altitude (above the button row) ---------- */
     {
         int panel_h = 46;

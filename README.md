@@ -94,7 +94,8 @@ the WinCE core font has no glyphs, so no text is lost.
 |---|---|---|
 | 0 | DOTMATRIX | Toyota Verso center dot-matrix MFD |
 | 1 | EL_GLOW | Citroen BX Digit full-width VFD |
-| 2 | CZERWONY | classic dark red |
+| 2 | SUBARU_XT | 1985 Subaru XT Turbo digital cluster |
+| 3 | CZERWONY | classic dark red |
 
 The **THEME** button cycles them and writes the choice to `hud_theme.txt`,
 which wins over `theme=` in `hud.ini`.
