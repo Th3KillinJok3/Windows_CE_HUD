@@ -1568,7 +1568,12 @@ static void draw_screen(HDC dc, int W, int H)
             }
             if (avail < 40) avail = 40;
 
+            /* TOP BAR TEXT REMOVED ON REQUEST:
+             * the GPS status lives in the bottom bar now, the top bar only
+             * keeps the background, the clock, battery, signal and X. */
+
             /* content: port status first, then the last sentence */
+#if 0
             if (g_scanning)
                 wcscpy(wbuf, T(S_SCAN));
             else if (g_probe_result == -1)
@@ -1617,6 +1622,7 @@ static void draw_screen(HDC dc, int W, int H)
                     DeleteObject(rgn);
                 }
             }
+#endif
         }
 
         /* X button - top right corner, full bar height */
