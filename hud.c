@@ -18,21 +18,16 @@
 #include <wchar.h>
 
 /* ============ CONFIG ============ */
-#define ODO_FILE_A    "\\Storage Card\\hud_odo.txt"
-#define ODO_FILE_B    "\\SDMMC\\hud_odo.txt"
-#define ODO_FILE_C    "E:\\hud_odo.txt"
-#define LOG_FILE      "\\Storage Card\\hud_log.txt"
-#define LOG_FILE_B    "\\SDMMC\\hud_log.txt"
-#define LOG_FILE_C    "E:\\hud_log.txt"
-#define THEME_FILE_A  "\\Storage Card\\hud_theme.txt"
-#define THEME_FILE_B  "\\SDMMC\\hud_theme.txt"
-#define THEME_FILE_C  "E:\\hud_theme.txt"
-#define FONT_FILE_A   "\\Storage Card\\hud_font.txt"
-#define FONT_FILE_B   "\\SDMMC\\hud_font.txt"
-#define FONT_FILE_C   "E:\\hud_font.txt"
-#define INI_FILE_A    "\\Storage Card\\hud.ini"
-#define INI_FILE_B    "\\SDMMC\\hud.ini"
-#define INI_FILE_C    "E:\\hud.ini"
+#define ODO_FILE_A    "hud_odo.txt"
+#define ODO_FILE_B    "hud_odo.txt"
+#define LOG_FILE      "hud_log.txt"
+#define LOG_FILE_B    "hud_log.txt"
+#define THEME_FILE_A  "hud_theme.txt"
+#define THEME_FILE_B  "hud_theme.txt"
+#define FONT_FILE_A   "hud_font.txt"
+#define FONT_FILE_B   "hud_font.txt"
+#define INI_FILE_A    "hud.ini"
+#define INI_FILE_B    "hud.ini"
 
 #define FIXED_PORT    L"COM2:"
 #define FIXED_PORT2   L"COM7:"
@@ -261,7 +256,6 @@ static void ini_load(void)
     FILE *f = fopen(INI_FILE_A, "r");
     char line[128];
     if (!f) f = fopen(INI_FILE_B, "r");
-    if (!f) f = fopen(INI_FILE_C, "r");
     if (!f) { logf_("hud.ini brak - metric + jezyk z systemu\n"); return; }
     {
         long pos = ftell(f);
@@ -314,7 +308,6 @@ static void log_open(void)
 {
     g_log = fopen(LOG_FILE, "w");
     if (!g_log) g_log = fopen(LOG_FILE_B, "w");
-    if (!g_log) g_log = fopen(LOG_FILE_C, "w");
     if (!g_log) return;
     setvbuf(g_log, NULL, _IONBF, 0);
     fprintf(g_log, "=== Lark HUD log ===\n");
@@ -516,7 +509,6 @@ static void font_load(void)
     FILE *f = fopen(FONT_FILE_A, "r");
     int v = -1;
     if (!f) f = fopen(FONT_FILE_B, "r");
-    if (!f) f = fopen(FONT_FILE_C, "r");
     if (f) {
         long pos = ftell(f);
         unsigned char bom[3];
@@ -542,7 +534,6 @@ static void font_save(void)
 {
     FILE *f = fopen(FONT_FILE_A, "w");
     if (!f) f = fopen(FONT_FILE_B, "w");
-    if (!f) f = fopen(FONT_FILE_C, "w");
     if (f) { fprintf(f, "%d\n", g_font_pick); fclose(f); }
 }
 
@@ -590,7 +581,6 @@ static void theme_load(void)
     FILE *f = fopen(THEME_FILE_A, "r");
     int v = 0;
     if (!f) f = fopen(THEME_FILE_B, "r");
-    if (!f) f = fopen(THEME_FILE_C, "r");
     if (f) {
         long pos = ftell(f);
         unsigned char bom[3];
@@ -606,7 +596,6 @@ static void theme_save(void)
 {
     FILE *f = fopen(THEME_FILE_A, "w");
     if (!f) f = fopen(THEME_FILE_B, "w");
-    if (!f) f = fopen(THEME_FILE_C, "w");
     if (f) { fprintf(f, "%d\n", g_theme); fclose(f); }
 }
 
@@ -615,7 +604,6 @@ static void odo_save(void)
     FILE *f = fopen(ODO_FILE_A, "w");
     int whole, frac;
     if (!f) f = fopen(ODO_FILE_B, "w");
-    if (!f) f = fopen(ODO_FILE_C, "w");
     if (!f) { logf_("ODO SAVE FAIL\n"); return; }
     whole = (int)g_odo_km;
     frac  = (int)((g_odo_km - whole) * 1000.0);
@@ -630,7 +618,6 @@ static void odo_load(void)
     FILE *f = fopen(ODO_FILE_A, "r");
     double v = 0.0;
     if (!f) f = fopen(ODO_FILE_B, "r");
-    if (!f) f = fopen(ODO_FILE_C, "r");
     if (f) {
         long pos = ftell(f);
         unsigned char bom[3];
@@ -2306,6 +2293,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR cmd, int show)
     W = GetSystemMetrics(SM_CXSCREEN);
     H = GetSystemMetrics(SM_CYSCREEN);
 
+    {
+        WCHAR wpath[MAX_PATH];
+        if (GetModuleFileNameW(NULL, wpath, MAX_PATH) > 0) {
+            WCHAR *slash = wcsrchr(wpath, L'\\');
+            if (slash) { *slash = 0; SetCurrentDirectoryW(wpath); }
+        }
+    }
     log_open();
     logf_("=== start %dx%d ===\n", W, H);
 
