@@ -91,6 +91,7 @@ static void logf_(const char *fmt, ...);
 /* ============ UNITS + LANGUAGES ============ */
 /* Everything is stored internally in metric (km/h, km, m).
  * Imperial is only a display conversion: mph, miles, feet. */
+static char g_font_name[32] = "";   /* font= from hud.ini (forward decl) */
 static int g_imperial = 0;   /* 0 = metric, 1 = imperial (hud.ini: units=imperial) */
 static int g_clock_24h = 1;  /* hud.ini: clock24=0 for a 12-hour clock */
 
@@ -462,7 +463,6 @@ static const WCHAR *g_font_candidates[] = {
     L"Arial"
 };
 static int g_font_pick = -1;
-static char g_font_name[32] = "";  /* font= from hud.ini, empty = not set */
 static int font_works(const WCHAR *face, int size, int idx);
 #define FONT_COUNT ((int)(sizeof(g_font_candidates)/sizeof(g_font_candidates[0])))
 
