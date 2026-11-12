@@ -1301,6 +1301,130 @@ static void text_center(HDC dc, int cx, int y, const WCHAR *s, COLORREF c, HFONT
     text_at(dc, cx - text_w(dc,s,f)/2, y, s, c, f);
 }
 
+
+/* ============ DOT-MATRIX RENDERER ============
+ * Draws digits/letters as 5x7 cells of square "LED" dots. Every lit dot is
+ * drawn with a darker 1px border, so the grid stays visible even inside a
+ * lit character - that is what gives the VERSO theme its dot-matrix LCD
+ * (OLED behind glass) look. Unlit dots are drawn very dark red, like the
+ * switched-off segments of a real matrix display.
+ */
+#define DOT_W 5
+#define DOT_H 7
+
+/* 5x7 font, one string per row, '#' = lit. Only the glyphs the HUD uses. */
+static const char *dm_glyph(WCHAR c)
+{
+    switch (c) {
+    case L'0': return "01110" "10001" "10011" "10101" "11001" "10001" "01110";
+    case L'1': return "00100" "01100" "00100" "00100" "00100" "00100" "01110";
+    case L'2': return "01110" "10001" "00001" "00010" "00100" "01000" "11111";
+    case L'3': return "11111" "00010" "00100" "00010" "00001" "10001" "01110";
+    case L'4': return "00010" "00110" "01010" "10010" "11111" "00010" "00010";
+    case L'5': return "11111" "10000" "11110" "00001" "00001" "10001" "01110";
+    case L'6': return "00110" "01000" "10000" "11110" "10001" "10001" "01110";
+    case L'7': return "11111" "00001" "00010" "00100" "01000" "01000" "01000";
+    case L'8': return "01110" "10001" "10001" "01110" "10001" "10001" "01110";
+    case L'9': return "01110" "10001" "10001" "01111" "00001" "00010" "01100";
+    case L'-': return "00000" "00000" "00000" "11111" "00000" "00000" "00000";
+    case L'.': return "00000" "00000" "00000" "00000" "00000" "01100" "01100";
+    case L' ': return "00000" "00000" "00000" "00000" "00000" "00000" "00000";
+    case L'A': return "01110" "10001" "10001" "11111" "10001" "10001" "10001";
+    case L'B': return "11110" "10001" "10001" "11110" "10001" "10001" "11110";
+    case L'C': return "01110" "10001" "10000" "10000" "10000" "10001" "01110";
+    case L'D': return "11110" "10001" "10001" "10001" "10001" "10001" "11110";
+    case L'E': return "11111" "10000" "10000" "11110" "10000" "10000" "11111";
+    case L'F': return "11111" "10000" "10000" "11110" "10000" "10000" "10000";
+    case L'G': return "01110" "10001" "10000" "10111" "10001" "10001" "01111";
+    case L'H': return "10001" "10001" "10001" "11111" "10001" "10001" "10001";
+    case L'I': return "01110" "00100" "00100" "00100" "00100" "00100" "01110";
+    case L'J': return "00111" "00010" "00010" "00010" "00010" "10010" "01100";
+    case L'K': return "10001" "10010" "10100" "11000" "10100" "10010" "10001";
+    case L'L': return "10000" "10000" "10000" "10000" "10000" "10000" "11111";
+    case L'M': return "10001" "11011" "10101" "10101" "10001" "10001" "10001";
+    case L'N': return "10001" "11001" "10101" "10011" "10001" "10001" "10001";
+    case L'O': return "01110" "10001" "10001" "10001" "10001" "10001" "01110";
+    case L'P': return "11110" "10001" "10001" "11110" "10000" "10000" "10000";
+    case L'Q': return "01110" "10001" "10001" "10001" "10101" "10010" "01101";
+    case L'R': return "11110" "10001" "10001" "11110" "10100" "10010" "10001";
+    case L'S': return "01111" "10000" "10000" "01110" "00001" "00001" "11110";
+    case L'T': return "11111" "00100" "00100" "00100" "00100" "00100" "00100";
+    case L'U': return "10001" "10001" "10001" "10001" "10001" "10001" "01110";
+    case L'V': return "10001" "10001" "10001" "10001" "10001" "01010" "00100";
+    case L'W': return "10001" "10001" "10001" "10101" "10101" "11011" "10001";
+    case L'X': return "10001" "10001" "01010" "00100" "01010" "10001" "10001";
+    case L'Y': return "10001" "10001" "01010" "00100" "00100" "00100" "00100";
+    case L'Z': return "11111" "00001" "00010" "00100" "01000" "10000" "11111";
+    default:  return 0;
+    }
+}
+
+/* Width of a dot-matrix string in pixels: cell = scale+gap, 1 cell gap between chars. */
+static int dm_w(const WCHAR *s, int scale, int gap)
+{
+    int n = 0, cw = (scale + gap);
+    while (*s) { if (*s != L' ') n++; s++; }
+    if (n == 0) return 0;
+    return n * DOT_W * cw + (n - 1) * cw;
+}
+static int dm_h(int scale, int gap)
+{
+    return DOT_H * (scale + gap) - gap;
+}
+
+/* Draw one dot: lit = bright core + darker bevel so the grid stays visible. */
+static void dm_dot(HDC dc, int x, int y, int scale, int gap,
+                   int lit, COLORREF on, COLORREF off, COLORREF grid)
+{
+    int sz = scale + gap;
+    if (lit) {
+        fill(dc, x, y, sz, sz, grid);                  /* dark cell frame */
+        fill(dc, x + 1, y + 1, sz - 1, sz - 1, on);    /* glowing core   */
+        if (scale > 3)                                  /* inner grid line */
+            fill(dc, x + 1, y + sz - 1, sz - 1, 1, grid);
+    } else {
+        fill(dc, x, y, sz, sz, grid);
+        fill(dc, x + 1, y + 1, sz - 2, sz - 2, off);
+    }
+}
+
+/* Draw a string as dot matrix. scale = px per dot, gap = px of grid between. */
+static void dm_text(HDC dc, int x, int y, const WCHAR *s, int scale, int gap,
+                    int lit_all, COLORREF on, COLORREF off, COLORREF grid)
+{
+    int cw = (DOT_W * (scale + gap));
+    int cx = x;
+    while (*s) {
+        const char *g = dm_glyph(*s);
+        if (g) {
+            int r, c;
+            for (r = 0; r < DOT_H; r++) {
+                for (c = 0; c < DOT_W; c++) {
+                    int lit = (g[r * DOT_W + c] == '#') && lit_all;
+                    dm_dot(dc, cx + c * (scale + gap), y + r * (scale + gap),
+                           scale, gap, lit, on, off, grid);
+                }
+            }
+        }
+        cx += cw + (scale + gap);
+        s++;
+    }
+}
+
+/* Centre a dot-matrix string. */
+static void dm_center(HDC dc, int cxmid, int y, const WCHAR *s,
+                      int scale, int gap, int lit_all,
+                      COLORREF on, COLORREF off, COLORREF grid)
+{
+    dm_text(dc, cxmid - dm_w(s, scale, gap) / 2, y, s, scale, gap,
+            lit_all, on, off, grid);
+}
+
+/* Dot-matrix colours for the active theme (used only by VERSO). */
+#define TM_ON   TAC
+#define TM_OFF  TACD
+#define TM_GRID TLINE
+
 static void round_rect(HDC dc,int x,int y,int w,int h,int rad,COLORREF fc,COLORREF lc)
 {
     HBRUSH b=(HBRUSH)CreateSolidBrush(fc); HPEN p=CreatePen(PS_SOLID,1,lc);
