@@ -2576,6 +2576,7 @@ static void draw_screen(HDC dc, int W, int H)
         }
     }
     }
+    }
 
     /* ---------- BOTTOM BAR: same GPS data as the top left corner ----------
      * The three on-screen buttons are gone; theme, font and units are set
@@ -2696,7 +2697,6 @@ static void draw_screen(HDC dc, int W, int H)
             }
         }
     }
-}
 }
 
 /* ============ OKNO ============ */
