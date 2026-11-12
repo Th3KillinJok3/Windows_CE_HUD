@@ -2656,9 +2656,9 @@ static void draw_screen(HDC dc, int W, int H)
         items[5] = L"Close";
         items[6] = L"Exit";
         /* panel */
-        fill(dc, mx, my, mw, mh, TPANEL);
+        fill(dc, mx, my, mw, mh, RGB(40,14,4));
         {
-            HPEN pen = CreatePen(PS_SOLID, 1, TLINE);
+            HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,115,0));
             HPEN op = (HPEN)SelectObject(dc, pen);
             HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
             Rectangle(dc, mx, my, mx + mw, my + mh);
@@ -2667,16 +2667,16 @@ static void draw_screen(HDC dc, int W, int H)
         }
         for (i = 0; i < 7; i++) {
             int iy = my + 4 + i * 34;
-            fill(dc, mx + 4, iy, mw - 8, 30, (i == 5) ? TERBG : TBTN);
+            fill(dc, mx + 4, iy, mw - 8, 30, (i == 6) ? RGB(78,20,4) : RGB(78,20,4));
             {
-                HPEN pen = CreatePen(PS_SOLID, 1, TBTNL);
+                HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,115,0));
                 HPEN op = (HPEN)SelectObject(dc, pen);
                 HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
                 Rectangle(dc, mx + 4, iy, mx + mw - 4, iy + 30);
                 SelectObject(dc, op); SelectObject(dc, ob);
                 DeleteObject(pen);
             }
-            text_at(dc, mx + 10, iy + (30 - 12) / 2, items[i], TTEXT, g_fBtn);
+            text_at(dc, mx + 10, iy + (30 - 12) / 2, items[i], RGB(255,175,25), g_fBtn);
             /* value on the right */
             {
                 WCHAR val[32];
@@ -2689,9 +2689,9 @@ static void draw_screen(HDC dc, int W, int H)
                 }
                 else if (i == 4) wcscpy(val, g_clock_24h ? L"1" : L"0");
                 else wcscpy(val, L"");
-                if (i < 5) {
+                if (i < 6) {
                     int vw = text_w(dc, val, g_fBtn);
-                    text_at(dc, mx + mw - 10 - vw, iy + (30 - 12) / 2, val, TAC, g_fBtn);
+                    text_at(dc, mx + mw - 10 - vw, iy + (30 - 12) / 2, val, RGB(255,175,25), g_fBtn);
                 }
             }
         }
