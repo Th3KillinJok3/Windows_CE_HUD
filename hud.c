@@ -64,10 +64,21 @@ static const Theme THEMES[4] = {
       RGB(120,150,175), RGB(96,200,255), RGB(16,48,72),
       RGB(251,191,36), RGB(42,34,12), RGB(248,113,113), RGB(42,26,26),
       RGB(60,32,32), RGB(120,60,60) },
+    /* 4 DOTMATRIX - 1980s VFD green/amber */
+    { RGB(2,8,4), RGB(6,20,10), RGB(10,40,18), RGB(120,255,140),
+      RGB(60,160,80), RGB(80,255,100), RGB(6,30,12),
+      RGB(255,190,60), RGB(40,28,6), RGB(255,120,80), RGB(30,14,4),
+      RGB(10,30,14), RGB(30,80,40) },
+    /* 5 EL_GLOW - electroluminescent aqua-cyan */
+    { RGB(2,8,12), RGB(6,20,26), RGB(8,40,52), RGB(200,255,250),
+      RGB(80,180,190), RGB(0,245,230), RGB(0,60,56),
+      RGB(255,200,80), RGB(40,30,8), RGB(255,120,120), RGB(30,8,8),
+      RGB(6,26,28), RGB(0,120,110) },
 };
-#define THEME_COUNT 4
+#define THEME_COUNT 6
 static const WCHAR *THEME_NAMES[THEME_COUNT] = {
-    L"VERSO", L"CZERWONY", L"AMBER", L"NIEBIESKI"
+    L"VERSO", L"CZERWONY", L"AMBER", L"NIEBIESKI",
+    L"DOTMATRIX", L"EL_GLOW"
 };
 static int g_theme = 0;          /* 0 = VERSO (default) */
 #define TBG     (THEMES[g_theme].bg)
@@ -83,6 +94,11 @@ static int g_theme = 0;          /* 0 = VERSO (default) */
 #define TERBG   (THEMES[g_theme].errBg)
 #define TBTN    (THEMES[g_theme].btn)
 #define TBTNL   (THEMES[g_theme].btnLine)
+
+/* Theme style helpers - which rendering path a theme uses. */
+static int dotmatrix_theme(void) { return (g_theme == 0 || g_theme == 4); }
+static int vfd_theme(void)      { return (g_theme == 4); }
+static int elglow_theme(void)   { return (g_theme == 5); }
 
 
 /* forward declaration: the ini reader logs before logf_() is defined */
@@ -216,8 +232,21 @@ static void ini_apply_line(const char *line)
         g_clock_24h = (atoi(val) != 0) ? 1 : 0;
         logf_("ini: clock24=%d\n", g_clock_24h);
     } else if (_stricmp(key, "theme") == 0) {
-        int t = atoi(val);
+        int t = -1;
+        if (val[0] >= '0' && val[0] <= '9') {
+            t = atoi(val);
+        } else {
+            int i;
+            for (i = 0; i < THEME_COUNT; i++) {
+                char wn[32]; int wi;
+                for (wi = 0; wi < 31 && THEME_NAMES[i][wi]; wi++)
+                    wn[wi] = (char)THEME_NAMES[i][wi];
+                wn[wi] = 0;
+                if (_stricmp(wn, val) == 0) { t = i; break; }
+            }
+        }
         if (t >= 0 && t < THEME_COUNT) { g_theme = t; logf_("ini: theme=%d\n", t); }
+        else logf_("ini: nieznany motyw '%s'\n", val);
     }
 }
 
@@ -420,6 +449,7 @@ static double my_cos(double x)
     return t;
 }
 
+static double my_sin(double x) { return my_cos(x - PI_D / 2.0); }
 static double my_sqrt(double x)
 {
     double r; int i;
@@ -1481,6 +1511,34 @@ static void round_rect(HDC dc,int x,int y,int w,int h,int rad,COLORREF fc,COLORR
     DeleteObject(b); DeleteObject(p);
 }
 
+/* panel_box: square recessed VFD box for VFD theme, rounded otherwise. */
+static void panel_box(HDC dc, int x, int y, int w, int h)
+{
+    if (vfd_theme()) {
+        fill(dc, x, y, w, h, TPANEL);
+        {
+            HPEN pen = CreatePen(PS_SOLID, 1, TLINE);
+            HPEN op = (HPEN)SelectObject(dc, pen);
+            HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+            Rectangle(dc, x, y, x + w, y + h);
+            {
+                HPEN sp = CreatePen(PS_SOLID, 1, RGB(0,0,0));
+                HPEN op2 = (HPEN)SelectObject(dc, sp);
+                MoveToEx(dc, x + 1, y + h - 2, NULL);
+                LineTo(dc, x + 1, y + 1);
+                LineTo(dc, x + w - 2, y + 1);
+                SelectObject(dc, op2);
+                DeleteObject(sp);
+            }
+            SelectObject(dc, op);
+            SelectObject(dc, ob);
+            DeleteObject(pen);
+        }
+    } else {
+        round_rect(dc, x, y, w, h, 8, TPANEL, TLINE);
+    }
+}
+
 static void odo_tick(void)
 {
     DWORD now = GetTickCount();
@@ -1559,7 +1617,7 @@ static void draw_screen(HDC dc, int W, int H)
                         if (h12 == 0) h12 = 12;
                         wsprintfW(tb, L"%d:%02d", h12, st.wMinute);
                     }
-                    if (g_theme == 0) {
+                    if (dotmatrix_theme()) {
                         /* VERSO: dot-matrix clock, same look as the digits */
                         int tw = dm_w(tb, 2, 1);
                         dm_text(dc, rxp - tw, (ph - dm_h(2,1)) / 2, tb,
@@ -1690,10 +1748,108 @@ static void draw_screen(HDC dc, int W, int H)
         cx = W / 2;
         if (freeH < 40) freeH = 40;
 
-        if (g_theme == 0) {
-            /* VERSO: large dot-matrix digits, scaled to the free height */
+        if (elglow_theme()) {
+            /* GAUGE: analog speedometer with a needle that moves with speed */
+            int cy = freeTop + freeH / 2;
+            int radius = freeH / 2 - 6;
+            int i, spd;
+            double maxv, frac;
+            if (radius > 95) radius = 95;
+            if (radius < 40) radius = 40;
+            spd = gpsOk ? g_speed_kmh : 0;
+            maxv = g_imperial ? 120.0 : 200.0;
+            frac = (double)spd / maxv;
+            if (frac < 0.0) frac = 0.0;
+            if (frac > 1.0) frac = 1.0;
+            /* dial face */
+            {
+                HBRUSH br = CreateSolidBrush(TPANEL);
+                HPEN pen = CreatePen(PS_SOLID, 2, TLINE);
+                HBRUSH ob = (HBRUSH)SelectObject(dc, br);
+                HPEN op = (HPEN)SelectObject(dc, pen);
+                Ellipse(dc, cx - radius, cy - radius, cx + radius, cy + radius);
+                SelectObject(dc, ob); SelectObject(dc, op);
+                DeleteObject(br); DeleteObject(pen);
+            }
+            /* tick marks */
+            for (i = 0; i <= 10; i++) {
+                double a = PI_D * (1.0 - (double)i / 10.0);
+                int x1 = cx + (int)((radius - 4) * my_cos(a));
+                int y1 = cy - (int)((radius - 4) * my_sin(a));
+                int x2 = cx + (int)((radius - 14) * my_cos(a));
+                int y2 = cy - (int)((radius - 14) * my_sin(a));
+                HPEN tp = CreatePen(PS_SOLID, 1, TDIM);
+                HPEN op = (HPEN)SelectObject(dc, tp);
+                MoveToEx(dc, x1, y1, NULL);
+                LineTo(dc, x2, y2);
+                SelectObject(dc, op);
+                DeleteObject(tp);
+            }
+            /* needle */
+            {
+                double a = PI_D * (1.0 - frac);
+                int nx = cx + (int)((radius - 18) * my_cos(a));
+                int ny = cy - (int)((radius - 18) * my_sin(a));
+                HPEN np = CreatePen(PS_SOLID, 3, TAC);
+                HPEN op = (HPEN)SelectObject(dc, np);
+                MoveToEx(dc, cx, cy, NULL);
+                LineTo(dc, nx, ny);
+                SelectObject(dc, op);
+                DeleteObject(np);
+            }
+            /* center cap */
+            {
+                HBRUSH br = CreateSolidBrush(TAC);
+                HPEN pen = CreatePen(PS_SOLID, 1, TAC);
+                HBRUSH ob = (HBRUSH)SelectObject(dc, br);
+                HPEN op = (HPEN)SelectObject(dc, pen);
+                Ellipse(dc, cx - 6, cy - 6, cx + 6, cy + 6);
+                SelectObject(dc, ob); SelectObject(dc, op);
+                DeleteObject(br); DeleteObject(pen);
+            }
+            /* speed value below the dial */
+            {
+                WCHAR nb[16];
+                int th;
+                if (gpsOk) wsprintfW(nb, L"%d", speed_disp());
+                else wcscpy(nb, L"--");
+                th = text_h(dc, nb, g_fVal);
+                text_center(dc, cx, cy + radius + 4, nb, gpsOk ? TTEXT : TDIM, g_fVal);
+                text_center(dc, cx, cy + radius + 4 + th + 2, unit, TDIM, g_fUnit);
+            }
+        } else if (dotmatrix_theme()) {
+            /* VERSO / VFD: large dot-matrix digits, scaled to the free height */
             int sc = 12, gp = 2;
             int wn, hh, total, x0;
+            /* VFD: 24-block segmented speed bar at the top of the free area */
+            if (vfd_theme()) {
+                int spd = gpsOk ? g_speed_kmh : 0;
+                double maxv = g_imperial ? 120.0 : 200.0;
+                int filled = (int)((double)spd / maxv * 24.0 + 0.5);
+                int segs = 24, i;
+                int segW = (W - 20) / segs;
+                int barY = freeTop + 2;
+                int barH = 10;
+                if (filled < 0) filled = 0;
+                if (filled > segs) filled = segs;
+                for (i = 0; i < segs; i++) {
+                    int sx = 10 + i * segW;
+                    COLORREF fc = (i < filled) ? TAC : TPANEL;
+                    fill(dc, sx + 1, barY, segW - 2, barH, fc);
+                    /* recessed cell outline */
+                    {
+                        HPEN pen = CreatePen(PS_SOLID, 1, TLINE);
+                        HPEN op = (HPEN)SelectObject(dc, pen);
+                        HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+                        Rectangle(dc, sx + 1, barY, sx + segW - 1, barY + barH);
+                        SelectObject(dc, op); SelectObject(dc, ob);
+                        DeleteObject(pen);
+                    }
+                }
+                freeTop += barH + 6;
+                freeH = freeBot - freeTop;
+                if (freeH < 40) freeH = 40;
+            }
             /* shrink the dot size until the block fits the free area */
             while (sc > 4 && dm_h(sc, gp) > freeH) sc--;
             wn = dm_w(buf, sc, gp);
@@ -1702,6 +1858,13 @@ static void draw_screen(HDC dc, int W, int H)
             x0 = cx - total / 2;
             spY = freeTop + (freeH - hh) / 2;
             dm_text(dc, x0, spY, buf, sc, gp, gpsOk, TM_ON, TM_OFF, TM_GRID);
+            /* VFD: scanline effect over the center speed digits */
+            if (vfd_theme()) {
+                int sy;
+                for (sy = spY; sy < spY + hh; sy += 3) {
+                    fill(dc, x0, sy, wn, 1, RGB(0,0,0));
+                }
+            }
             text_at(dc, x0 + wn + gap, spY + hh - hUnit - 4, unit, TDIM, g_fUnit);
         } else {
             HFONT fBig = g_fSpeed;
@@ -1747,12 +1910,12 @@ static void draw_screen(HDC dc, int W, int H)
         int panel_by = H - BOT_H - 8 - panel_h;
         bw=(W-18)/2; bh=panel_h; by=panel_by;
 
-        round_rect(dc,6,by,bw,bh,8,TPANEL,TLINE);
+        panel_box(dc,6,by,bw,bh);
         text_at(dc,14,by+4,T(S_ODO),TDIM,g_fLabel);
         odo_disp(&odo_w, &odo_f);
         wsprintfW(buf,L"%d.%d %s",odo_w,odo_f,
                   g_imperial ? T(S_MI) : T(S_KM));
-        if (g_theme == 0) {
+        if (dotmatrix_theme()) {
             WCHAR nb[24], ub[8];
             wsprintfW(nb,L"%d.%d",odo_w,odo_f);
             wsprintfW(ub,L"%s", g_imperial ? T(S_MI) : T(S_KM));
@@ -1762,7 +1925,7 @@ static void draw_screen(HDC dc, int W, int H)
             text_at(dc,14,by+20,buf,TAC,g_fVal);
         }
 
-        round_rect(dc,12+bw,by,bw,bh,8,TPANEL,TLINE);
+        panel_box(dc,12+bw,by,bw,bh);
         text_at(dc,20+bw,by+4,T(S_ALT),TDIM,g_fLabel);
         {
             const WCHAR *au = g_imperial ? T(S_FT) : T(S_M);
@@ -1770,7 +1933,7 @@ static void draw_screen(HDC dc, int W, int H)
             else if (gpsOk)        wsprintfW(buf,L"--- %s",au);
             else                   wsprintfW(buf,L"-- %s",au);
         }
-        if (g_theme == 0) {
+        if (dotmatrix_theme()) {
             WCHAR nb[24], ub[8];
             if (gpsOk && g_alt_ok) wsprintfW(nb,L"%d",alt_disp());
             else wcscpy(nb,L"---");

@@ -96,6 +96,8 @@ the WinCE core font has no glyphs, so no text is lost.
 | 1 | CZERWONY | classic dark red |
 | 2 | AMBER | amber / orange |
 | 3 | NIEBIESKI | blue |
+| 4 | DOTMATRIX | 1980s VFD green/amber display |
+| 5 | EL_GLOW | electroluminescent aqua-cyan display |
 
 The **THEME** button cycles them and writes the choice to `hud_theme.txt`,
 which wins over `theme=` in `hud.ini`.
