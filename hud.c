@@ -18,16 +18,16 @@
 #include <wchar.h>
 
 /* ============ CONFIG ============ */
-#define ODO_FILE_A    "hud_odo.txt"
-#define ODO_FILE_B    "hud_odo.txt"
-#define LOG_FILE      "hud_log.txt"
-#define LOG_FILE_B    "hud_log.txt"
-#define THEME_FILE_A  "hud_theme.txt"
-#define THEME_FILE_B  "hud_theme.txt"
-#define FONT_FILE_A   "hud_font.txt"
-#define FONT_FILE_B   "hud_font.txt"
-#define INI_FILE_A    "hud.ini"
-#define INI_FILE_B    "hud.ini"
+#define ODO_FILE_A    "\\Storage Card\\hud_odo.txt"
+#define ODO_FILE_B    "\\SDMMC\\hud_odo.txt"
+#define LOG_FILE      "\\Storage Card\\hud_log.txt"
+#define LOG_FILE_B    "\\SDMMC\\hud_log.txt"
+#define THEME_FILE_A  "\\Storage Card\\hud_theme.txt"
+#define THEME_FILE_B  "\\SDMMC\\hud_theme.txt"
+#define FONT_FILE_A   "\\Storage Card\\hud_font.txt"
+#define FONT_FILE_B   "\\SDMMC\\hud_font.txt"
+#define INI_FILE_A    "\\Storage Card\\hud.ini"
+#define INI_FILE_B    "\\SDMMC\\hud.ini"
 
 #define FIXED_PORT    L"COM2:"
 #define FIXED_PORT2   L"COM7:"
@@ -46,7 +46,7 @@ typedef struct {
 /* Theme 0 - VERSO: red overlay taken from the Toyota Verso 2017
  * instrument cluster (orange glow) recoloured to red. Dark, high
  * contrast, soft red halo around the digits. */
-static const Theme THEMES[4] = {
+static const Theme THEMES[6] = {
     { RGB(8,4,6), RGB(30,10,14), RGB(96,18,26), RGB(255,86,72),
       RGB(150,60,58), RGB(255,34,34), RGB(120,12,16),
       RGB(255,150,40), RGB(70,36,6), RGB(255,80,60), RGB(80,10,10),
@@ -100,6 +100,7 @@ static int g_menu_open = 0;      /* on-screen settings menu */
 static int dotmatrix_theme(void) { return (g_theme == 0); }
 static int toyota_theme(void)   { return (g_theme == 4); }
 static int elglow_theme(void)   { return (g_theme == 5); }
+static int vfd_theme(void)      { return toyota_theme(); }
 
 
 /* forward declaration: the ini reader logs before logf_() is defined */
@@ -2654,13 +2655,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR cmd, int show)
     W = GetSystemMetrics(SM_CXSCREEN);
     H = GetSystemMetrics(SM_CYSCREEN);
 
-    {
-        WCHAR wpath[MAX_PATH];
-        if (GetModuleFileNameW(NULL, wpath, MAX_PATH) > 0) {
-            WCHAR *slash = wcsrchr(wpath, L'\\');
-            if (slash) { *slash = 0; SetCurrentDirectoryW(wpath); }
-        }
-    }
     log_open();
     logf_("=== start %dx%d ===\n", W, H);
 
