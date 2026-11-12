@@ -81,6 +81,7 @@ static const WCHAR *THEME_NAMES[THEME_COUNT] = {
     L"DOTMATRIX", L"EL_GLOW"
 };
 static int g_theme = 0;          /* 0 = VERSO (default) */
+static int g_menu_open = 0;      /* on-screen settings menu */
 #define TBG     (THEMES[g_theme].bg)
 #define TPANEL  (THEMES[g_theme].panel)
 #define TLINE   (THEMES[g_theme].line)
@@ -1952,7 +1953,7 @@ static void draw_screen(HDC dc, int W, int H)
     {
         int by2 = H - BOT_H;
         int px = 6;
-        int avail = W - 8 - px;
+        int avail = W - 62 - px;
         COLORREF bg = TACD, fg = TAC;
         WCHAR wbuf[160];
 
@@ -1978,6 +1979,75 @@ static void draw_screen(HDC dc, int W, int H)
             int off = 0;
             if (tw > avail) off = g_marq % (tw + 30);
             text_at(dc, px - off, by2 + (BOT_H - 12) / 2, wbuf, fg, g_fTop);
+        }
+        /* MENU button - bottom right */
+        {
+            int mx = W - 58;
+            fill(dc, mx, by2, 54, BOT_H, TBTN);
+            {
+                HPEN pen = CreatePen(PS_SOLID, 1, TBTNL);
+                HPEN op = (HPEN)SelectObject(dc, pen);
+                HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+                Rectangle(dc, mx, by2, mx + 54, by2 + BOT_H);
+                SelectObject(dc, op); SelectObject(dc, ob);
+                DeleteObject(pen);
+            }
+            text_center(dc, mx + 27, by2 + (BOT_H - 12) / 2, L"MENU", TTEXT, g_fTop);
+        }
+    }
+    /* on-screen settings menu overlay */
+    if (g_menu_open) {
+        int mx = W - 250;
+        int my = TOP_H + 4;
+        int mw = 240;
+        int mh = 6 * 34 + 8;
+        int i;
+        const WCHAR *items[6];
+        items[0] = L"Theme";
+        items[1] = L"Font";
+        items[2] = L"Units";
+        items[3] = L"Language";
+        items[4] = L"Clock 24h";
+        items[5] = L"Close";
+        /* panel */
+        fill(dc, mx, my, mw, mh, TPANEL);
+        {
+            HPEN pen = CreatePen(PS_SOLID, 1, TLINE);
+            HPEN op = (HPEN)SelectObject(dc, pen);
+            HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+            Rectangle(dc, mx, my, mx + mw, my + mh);
+            SelectObject(dc, op); SelectObject(dc, ob);
+            DeleteObject(pen);
+        }
+        for (i = 0; i < 6; i++) {
+            int iy = my + 4 + i * 34;
+            fill(dc, mx + 4, iy, mw - 8, 30, (i == 5) ? TERBG : TBTN);
+            {
+                HPEN pen = CreatePen(PS_SOLID, 1, TBTNL);
+                HPEN op = (HPEN)SelectObject(dc, pen);
+                HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+                Rectangle(dc, mx + 4, iy, mx + mw - 4, iy + 30);
+                SelectObject(dc, op); SelectObject(dc, ob);
+                DeleteObject(pen);
+            }
+            text_at(dc, mx + 10, iy + (30 - 12) / 2, items[i], TTEXT, g_fBtn);
+            /* value on the right */
+            {
+                WCHAR val[32];
+                if (i == 0) wsprintfW(val, L"%s", THEME_NAMES[g_theme]);
+                else if (i == 1) wsprintfW(val, L"%s", g_font_candidates[g_font_pick]);
+                else if (i == 2) wcscpy(val, g_imperial ? L"imperial" : L"metric");
+                else if (i == 3) {
+                    char c0 = LANG_CODES[g_lang][0], c1 = LANG_CODES[g_lang][1];
+                    wsprintfW(val, L"%c%c", (WCHAR)c0, (WCHAR)c1);
+                }
+                else if (i == 4) wcscpy(val, g_clock_24h ? L"1" : L"0");
+                else wcscpy(val, L"");
+                if (i < 5) {
+                    int vw = text_w(dc, val, g_fBtn);
+                    text_at(dc, mx + mw - 10 - vw, iy + (30 - 12) / 2, val, TAC, g_fBtn);
+                }
+            }
         }
     }
 }
@@ -2053,11 +2123,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_LBUTTONDOWN: {
         int x=LOWORD(lp), y=HIWORD(lp);
         RECT r;
-        int brw, brx, bry;
+        int W, H;
         GetClientRect(hwnd,&r);
+        W = r.right; H = r.bottom;
 
         /* X - top right corner, full status bar height */
-        if (x >= r.right - X_W && y < TOP_H) {
+        if (x >= W - X_W && y < TOP_H) {
             logf_("X: zamykam\n");
             g_running = 0;
             odo_save();
@@ -2066,8 +2137,56 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         }
 
-        /* The ROW of on-screen buttons is gone on purpose: theme, font and
-         * units are configured in hud.ini. Only the X button remains. */
+        /* MENU button - bottom right */
+        if (!g_menu_open && x >= W - 58 && y >= H - BOT_H) {
+            g_menu_open = 1;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+        }
+
+        if (g_menu_open) {
+            int mx = W - 250;
+            int my = TOP_H + 4;
+            int mw = 240;
+            int i;
+            int handled = 0;
+            /* click outside panel closes menu */
+            if (x < mx || x > mx + mw || y < my || y > my + 6 * 34 + 8) {
+                g_menu_open = 0;
+                InvalidateRect(hwnd, NULL, FALSE);
+                return 0;
+            }
+            for (i = 0; i < 6; i++) {
+                int iy = my + 4 + i * 34;
+                if (x >= mx + 4 && x <= mx + mw - 4 && y >= iy && y <= iy + 30) {
+                    handled = 1;
+                    if (i == 0) { /* Theme */
+                        g_theme = (g_theme + 1) % THEME_COUNT;
+                        theme_save();
+                    } else if (i == 1) { /* Font */
+                        g_font_pick = (g_font_pick + 1) % FONT_COUNT;
+                        font_save();
+                        make_fonts();
+                    } else if (i == 2) { /* Units */
+                        g_imperial = !g_imperial;
+                    } else if (i == 3) { /* Language */
+                        g_lang = (g_lang + 1) % LANG_COUNT;
+                    } else if (i == 4) { /* Clock 24h */
+                        g_clock_24h = !g_clock_24h;
+                    } else if (i == 5) { /* Close */
+                        g_menu_open = 0;
+                    }
+                    InvalidateRect(hwnd, NULL, FALSE);
+                    break;
+                }
+            }
+            if (!handled) {
+                g_menu_open = 0;
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+            return 0;
+        }
+
         return 0;
     }
     case WM_ERASEBKGND:
