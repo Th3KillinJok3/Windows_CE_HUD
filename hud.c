@@ -92,6 +92,7 @@ static void logf_(const char *fmt, ...);
 /* Everything is stored internally in metric (km/h, km, m).
  * Imperial is only a display conversion: mph, miles, feet. */
 static int g_imperial = 0;   /* 0 = metric, 1 = imperial (hud.ini: units=imperial) */
+static int g_clock_24h = 1;  /* hud.ini: clock24=0 for a 12-hour clock */
 
 /* Language ids. Auto-detected from the OS locale at startup, overridable
  * with lang=xx in hud.ini. */
@@ -200,6 +201,9 @@ static void ini_apply_line(const char *line)
         int li = lang_from_code(val);
         if (li >= 0) { g_lang = li; logf_("ini: lang=%s\n", val); }
         else logf_("ini: nieznany jezyk '%s'\n", val);
+    } else if (_stricmp(key, "clock24") == 0) {
+        g_clock_24h = (atoi(val) != 0) ? 1 : 0;
+        logf_("ini: clock24=%d\n", g_clock_24h);
     } else if (_stricmp(key, "theme") == 0) {
         int t = atoi(val);
         if (t >= 0 && t < THEME_COUNT) { g_theme = t; logf_("ini: theme=%d\n", t); }
@@ -1498,6 +1502,32 @@ static void draw_screen(HDC dc, int W, int H)
             /* right side: battery + signal, always visible */
             {
                 int rxp = W - X_W - 4;
+
+                /* clock: HH:MM, top right corner, left of the X button */
+                {
+                    WCHAR tb[16];
+                    SYSTEMTIME st;
+                    GetLocalTime(&st);
+                    if (g_clock_24h)
+                        wsprintfW(tb, L"%02d:%02d", st.wHour, st.wMinute);
+                    else {
+                        int h12 = st.wHour % 12;
+                        if (h12 == 0) h12 = 12;
+                        wsprintfW(tb, L"%d:%02d", h12, st.wMinute);
+                    }
+                    if (g_theme == 0) {
+                        /* VERSO: dot-matrix clock, same look as the digits */
+                        int tw = dm_w(tb, 2, 1);
+                        dm_text(dc, rxp - tw, (ph - dm_h(2,1)) / 2, tb,
+                                2, 1, 1, TTEXT, TACD, TLINE);
+                        rxp -= (tw + 8);
+                    } else {
+                        int tw = text_w(dc, tb, g_fBtn);
+                        text_at(dc, rxp - tw, (ph - 12) / 2 - 1, tb, TTEXT, g_fBtn);
+                        rxp -= (tw + 8);
+                    }
+                }
+
                 /* signal: HDOP bars */
                 {
                     int bars = 0, i;
@@ -1852,11 +1882,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             g_marq += 3;
             if (g_marq > 20000) g_marq = 0;
         }
-        key = (g_fix << 0) ^ (g_speed_kmh << 1) ^ (g_sats << 11)
-            ^ (g_alt_m << 17) ^ (g_course << 28) ^ (g_hdop10 << 9)
-            ^ (g_batt_pct << 21) ^ (g_theme << 3) ^ (g_font_pick << 25)
-            ^ (g_scanning << 5) ^ (g_probe_result << 7)
-            ^ ((int)g_odo_km << 13) ^ (g_speed_max << 19);
+        /* the clock is part of the key, so the bar repaints when a minute
+         * rolls over even if nothing else changed */
+        {
+            SYSTEMTIME st;
+            GetLocalTime(&st);
+            key = (g_fix << 0) ^ (g_speed_kmh << 1) ^ (g_sats << 11)
+                ^ (g_alt_m << 17) ^ (g_course << 28) ^ (g_hdop10 << 9)
+                ^ (g_batt_pct << 21) ^ (g_theme << 3) ^ (g_font_pick << 25)
+                ^ (g_scanning << 5) ^ (g_probe_result << 7)
+                ^ ((int)g_odo_km << 13) ^ (g_speed_max << 19)
+                ^ (st.wHour << 7) ^ (st.wMinute << 16);
+        }
         if (key != last_key) { need = 1; last_key = key; }
         if ((tick % 4) == 0) need = 1;      /* 2 s - odswiez pasek baterii */
         if ((tick % 120) == 0) {
