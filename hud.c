@@ -921,7 +921,7 @@ static HANDLE open_port(const WCHAR *port, DWORD baud, int do_wakeup)
          * receiver answers within a few hundred ms, so we only give it
          * 300 ms and then start reading straight away. */
         wakeup_for_baud(h, baud);
-        Sleep(300);
+        Sleep(150);
     }
     memset(&st, 0, sizeof(st));
     if (ClearCommError(h, &errs, &st))
@@ -987,7 +987,7 @@ static DWORD WINAPI gps_thread(LPVOID param)
             if (h != INVALID_HANDLE_VALUE) {
                 /* make sure data is really flowing before accepting the port */
                 int probe_ok = 0, prxn = 0;
-                DWORD pdl = GetTickCount() + 1200;
+                DWORD pdl = GetTickCount() + 600;
                 DWORD pgot;
                 while (GetTickCount() < pdl && g_running && !probe_ok) {
                     pgot = 0;
@@ -1027,7 +1027,7 @@ static DWORD WINAPI gps_thread(LPVOID param)
             HANDLE h = open_port(FIXED_PORT2, FIXED_BAUD ? FIXED_BAUD : CBR_4800, 1);
             if (h != INVALID_HANDLE_VALUE) {
                 int probe_ok = 0, prxn = 0;
-                DWORD pdl = GetTickCount() + 1200;
+                DWORD pdl = GetTickCount() + 600;
                 DWORD pgot;
                 while (GetTickCount() < pdl && g_running && !probe_ok) {
                     pgot = 0;
@@ -1075,7 +1075,7 @@ static DWORD WINAPI gps_thread(LPVOID param)
 
                 /* PHASE A: listen for 1.5 s WITHOUT transmitting anything */
                 rxn = 0;
-                deadline = GetTickCount() + 1500;
+                deadline = GetTickCount() + 800;
                 while (GetTickCount() < deadline && g_running && !saw) {
                     got = 0;
                     if (!ReadFile(h, buf, sizeof(buf), &got, NULL) || got == 0)
@@ -1115,7 +1115,7 @@ static DWORD WINAPI gps_thread(LPVOID param)
                 /* PHASE B: silence -> send wakeup and listen 2.5 s more */
                 if (!saw && !sawbin) {
                     wakeup_for_baud(h, g_bauds[bi]);
-                    deadline = GetTickCount() + 2500;
+                    deadline = GetTickCount() + 1200;
                     while (GetTickCount() < deadline && g_running && !saw) {
                         got = 0;
                         if (!ReadFile(h, buf, sizeof(buf), &got, NULL) || got == 0)
@@ -1173,7 +1173,7 @@ static DWORD WINAPI gps_thread(LPVOID param)
             logf_("NO GPS PORT FOUND — retry za 5 s\n");
             {
                 DWORD t0 = GetTickCount();
-                while (g_running && GetTickCount() - t0 < 5000) Sleep(500);
+                while (g_running && GetTickCount() - t0 < 2000) Sleep(500);
             }
             continue;
         }
