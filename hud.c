@@ -1866,16 +1866,16 @@ static void draw_screen(HDC dc, int W, int H)
                 y += (H*5/100) + 2;
                 for (i = 0; i < 8; i++) {
                     COLORREF c = (i < active) ? RGB(255,175,25) : RGB(78,20,4);
-                    fill(dc, rx, y, rw - 8, H*6/100, c);
+                    fill(dc, rx, y, rw - 8, 4, c);
                     {
                         HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,115,0));
                         HPEN op = (HPEN)SelectObject(dc, pen);
                         HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
-                        Rectangle(dc, rx, y, rx + (rw - 8), y + (H*6/100));
+                        Rectangle(dc, rx, y, rx + (rw - 8), y + 4);
                         SelectObject(dc, op); SelectObject(dc, ob);
                         DeleteObject(pen);
                     }
-                    y += (H*6/100) + 2;
+                    y += 4 + 2;
                 }
                 y += 4;
             }
@@ -1896,16 +1896,16 @@ static void draw_screen(HDC dc, int W, int H)
                 y += (H*5/100) + 2;
                 for (i = 0; i < 8; i++) {
                     COLORREF c = (i < bars) ? RGB(255,175,25) : RGB(78,20,4);
-                    fill(dc, rx, y, rw - 8, H*6/100, c);
+                    fill(dc, rx, y, rw - 8, 4, c);
                     {
                         HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,115,0));
                         HPEN op = (HPEN)SelectObject(dc, pen);
                         HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
-                        Rectangle(dc, rx, y, rx + (rw - 8), y + (H*6/100));
+                        Rectangle(dc, rx, y, rx + (rw - 8), y + 4);
                         SelectObject(dc, op); SelectObject(dc, ob);
                         DeleteObject(pen);
                     }
-                    y += (H*6/100) + 2;
+                    y += 4 + 2;
                 }
             }
         }
@@ -2107,8 +2107,8 @@ static void draw_screen(HDC dc, int W, int H)
                     int k, y = 112;
                     for (k = 0; k < 8; k++) {
                         COLORREF c = (k < active) ? RGB(35,255,175) : RGB(12,58,44);
-                        fill(dc, W - 74, y, 58, 4, c);
-                        y += 6;
+                        fill(dc, W - 74, y, 58, 3, c);
+                        y += 5;
                     }
                 }
                 /* GPS signal */
@@ -2126,8 +2126,8 @@ static void draw_screen(HDC dc, int W, int H)
                     int k, y = 164;
                     for (k = 0; k < 8; k++) {
                         COLORREF c = (k < bars) ? RGB(35,255,175) : RGB(12,58,44);
-                        fill(dc, W - 74, y, 58, 4, c);
-                        y += 6;
+                        fill(dc, W - 74, y, 58, 3, c);
+                        y += 5;
                     }
                 }
             }
