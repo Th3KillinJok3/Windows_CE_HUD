@@ -829,17 +829,21 @@ static HANDLE open_port(const WCHAR *port, DWORD baud, int do_wakeup)
     } else {
         logf_("  GetCommState FAIL err=%d\n",(int)GetLastError());
     }
-    to.ReadIntervalTimeout = 20;
+    to.ReadIntervalTimeout = 10;
     to.ReadTotalTimeoutMultiplier = 0;
-    to.ReadTotalTimeoutConstant = 100;
+    to.ReadTotalTimeoutConstant = 30;   /* was 100 ms */
     to.WriteTotalTimeoutMultiplier = 0;
     to.WriteTotalTimeoutConstant = 0;
     SetCommTimeouts(h,&to);
     PurgeComm(h, PURGE_RXCLEAR | PURGE_TXCLEAR);
 
     if (do_wakeup) {
+        /* Wakeup used to be followed by Sleep(1500): with two candidate
+         * ports that alone delayed the first NMEA line by ~4.5 s. The
+         * receiver answers within a few hundred ms, so we only give it
+         * 300 ms and then start reading straight away. */
         wakeup_for_baud(h, baud);
-        Sleep(1500);
+        Sleep(300);
     }
     memset(&st, 0, sizeof(st));
     if (ClearCommError(h, &errs, &st))
@@ -905,12 +909,14 @@ static DWORD WINAPI gps_thread(LPVOID param)
             if (h != INVALID_HANDLE_VALUE) {
                 /* make sure data is really flowing before accepting the port */
                 int probe_ok = 0, prxn = 0;
-                DWORD pdl = GetTickCount() + 3000;
+                DWORD pdl = GetTickCount() + 1200;
                 DWORD pgot;
                 while (GetTickCount() < pdl && g_running && !probe_ok) {
                     pgot = 0;
-                    if (!ReadFile(h, buf, sizeof(buf), &pgot, NULL) || pgot == 0)
+                    if (!ReadFile(h, buf, sizeof(buf), &pgot, NULL) || pgot == 0) {
+                        Sleep(10);   /* do not spin, but do not sleep long */
                         continue;
+                    }
                     g_total_bytes += pgot;
                     g_last_rx_tick = GetTickCount();
                     {
@@ -943,12 +949,14 @@ static DWORD WINAPI gps_thread(LPVOID param)
             HANDLE h = open_port(FIXED_PORT2, FIXED_BAUD ? FIXED_BAUD : CBR_4800, 1);
             if (h != INVALID_HANDLE_VALUE) {
                 int probe_ok = 0, prxn = 0;
-                DWORD pdl = GetTickCount() + 3000;
+                DWORD pdl = GetTickCount() + 1200;
                 DWORD pgot;
                 while (GetTickCount() < pdl && g_running && !probe_ok) {
                     pgot = 0;
-                    if (!ReadFile(h, buf, sizeof(buf), &pgot, NULL) || pgot == 0)
+                    if (!ReadFile(h, buf, sizeof(buf), &pgot, NULL) || pgot == 0) {
+                        Sleep(10);
                         continue;
+                    }
                     g_total_bytes += pgot;
                     g_last_rx_tick = GetTickCount();
                     {
@@ -1109,7 +1117,7 @@ static DWORD WINAPI gps_thread(LPVOID param)
                         wakeup_for_baud(g_hGps, g_used_baud);
                         lastwake = GetTickCount();
                     }
-                    Sleep(50);
+                    Sleep(15);   /* was 50 ms - that alone capped updates at 20 Hz */
                     continue;
                 }
                 g_last_rx_tick = GetTickCount();
