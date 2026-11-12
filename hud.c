@@ -1335,18 +1335,20 @@ static HFONT mkfont(int size, int weight)
 
 static void make_fonts(void)
 {
+    int H = GetSystemMetrics(SM_CYSCREEN);
+    if (H < 120) H = 240;
     if (g_fSpeed) DeleteObject(g_fSpeed);
     if (g_fUnit)  DeleteObject(g_fUnit);
     if (g_fLabel) DeleteObject(g_fLabel);
     if (g_fVal)   DeleteObject(g_fVal);
     if (g_fBtn)   DeleteObject(g_fBtn);
     if (g_fTop)   DeleteObject(g_fTop);
-    g_fSpeed = mkfont(-96, FW_BOLD);
-    g_fUnit  = mkfont(-22, FW_BOLD);
-    g_fLabel = mkfont(-14, FW_BOLD);
-    g_fVal   = mkfont(-24, FW_BOLD);
-    g_fBtn   = mkfont(-16, FW_BOLD);
-    g_fTop   = mkfont(-12, FW_BOLD);
+    g_fSpeed = mkfont(-(H * 28 / 100), FW_BOLD);
+    g_fUnit  = mkfont(-(H * 8 / 100), FW_BOLD);
+    g_fLabel = mkfont(-(H * 5 / 100), FW_BOLD);
+    g_fVal   = mkfont(-(H * 10 / 100), FW_BOLD);
+    g_fBtn   = mkfont(-(H * 6 / 100), FW_BOLD);
+    g_fTop   = mkfont(-(H * 5 / 100), FW_BOLD);
 }
 
 static void fill(HDC dc, int x, int y, int w, int h, COLORREF c)
@@ -1571,7 +1573,7 @@ static void odo_tick(void)
 #define BTN_H    22          /* kept for the X button geometry only */
 #define BTN_GAP  4
 #define BTN_R    6
-#define BOT_H    18          /* bottom status bar height */
+#define BOT_H    28          /* bottom touch bar height (fits 320x240) */
 #define TOP_H    18          /* wysokosc paska statusu */
 #define X_W      26          /* szerokosc guzika X */
 
@@ -1740,51 +1742,48 @@ static void draw_screen(HDC dc, int W, int H)
         text_center(dc, W - X_W / 2, (ph - 14) / 2 + 1, L"X", TER, g_fBtn);
     }
 
-    /* ---------- TOYOTA VERSO DOT-MATRIX MFD ---------- */
+    /* ---------- TOYOTA VERSO DOT-MATRIX MFD (320x240) ---------- */
     if (toyota_theme()) {
-        /* outer surround + LCD frame */
         fill(dc, 0, 0, W, H, RGB(4,2,1));
+        /* outer LCD frame */
         {
             HPEN pen = CreatePen(PS_SOLID, 2, RGB(255,95,0));
             HBRUSH br = CreateSolidBrush(RGB(52,12,2));
             HPEN op = (HPEN)SelectObject(dc, pen);
             HBRUSH ob = (HBRUSH)SelectObject(dc, br);
-            RoundRect(dc, 12, 8, 468, 226, 8, 8);
+            RoundRect(dc, 6, 6, W - 6, H - 34, 8, 8);
             SelectObject(dc, op); SelectObject(dc, ob);
             DeleteObject(pen); DeleteObject(br);
         }
-        /* vertical divider at x=388 */
+        /* vertical split at x = W*80/100 */
         {
+            int sx = W * 80 / 100;
             HPEN pen = CreatePen(PS_SOLID, 2, RGB(255,115,0));
             HPEN op = (HPEN)SelectObject(dc, pen);
-            MoveToEx(dc, 388, 10, NULL);
-            LineTo(dc, 388, 224);
-            SelectObject(dc, op);
-            DeleteObject(pen);
+            MoveToEx(dc, sx, 8, NULL); LineTo(dc, sx, H - 36);
+            SelectObject(dc, op); DeleteObject(pen);
         }
-        /* horizontal dividers at y=64 and 166 */
+        /* horizontal dividers */
         {
+            int y1 = H * 22 / 100;
+            int y2 = H * 62 / 100;
             HPEN pen = CreatePen(PS_SOLID, 2, RGB(255,115,0));
             HPEN op = (HPEN)SelectObject(dc, pen);
-            MoveToEx(dc, 20, 64, NULL); LineTo(dc, 384, 64);
-            MoveToEx(dc, 20, 166, NULL); LineTo(dc, 384, 166);
-            SelectObject(dc, op);
-            DeleteObject(pen);
+            MoveToEx(dc, 10, y1, NULL); LineTo(dc, W * 80 / 100 - 4, y1);
+            MoveToEx(dc, 10, y2, NULL); LineTo(dc, W * 80 / 100 - 4, y2);
+            SelectObject(dc, op); DeleteObject(pen);
         }
         /* Top tier: Compass left, Altitude right */
         {
-            /* compass */
-            {
-                WCHAR cb[40];
-                static const WCHAR *DIRS[8] = { L"N",L"NE",L"E",L"SE",L"S",L"SW",L"W",L"NW" };
-                int cdx = (g_course + 22) / 45;
-                if (cdx > 7) cdx = 0;
-                if (gpsOk && g_course_ok) wsprintfW(cb, L"%s %d", DIRS[cdx], g_course);
-                else wcscpy(cb, L"--");
-                text_at(dc, 24, 20, cb, RGB(255,125,0), g_fLabel);
-                text_at(dc, 24, 40, L"HDG", RGB(255,115,0), g_fTop);
-            }
-            /* altitude */
+            int y1 = H * 22 / 100;
+            WCHAR cb[40];
+            static const WCHAR *DIRS[8] = { L"N",L"NE",L"E",L"SE",L"S",L"SW",L"W",L"NW" };
+            int cdx = (g_course + 22) / 45;
+            if (cdx > 7) cdx = 0;
+            if (gpsOk && g_course_ok) wsprintfW(cb, L"%s %d", DIRS[cdx], g_course);
+            else wcscpy(cb, L"--");
+            text_at(dc, 12, 10, cb, RGB(255,125,0), g_fLabel);
+            text_at(dc, 12, 10 + (H*5/100) + 2, L"HDG", RGB(255,115,0), g_fTop);
             {
                 WCHAR ab[32];
                 const WCHAR *au = g_imperial ? T(S_FT) : T(S_M);
@@ -1792,60 +1791,61 @@ static void draw_screen(HDC dc, int W, int H)
                 else if (gpsOk) wsprintfW(ab, L"--- %s", au);
                 else wsprintfW(ab, L"-- %s", au);
                 int aw = text_w(dc, ab, g_fLabel);
-                text_at(dc, 384 - aw - 4, 20, ab, RGB(255,125,0), g_fLabel);
-                text_at(dc, 384 - text_w(dc, L"ALT", g_fTop) - 4, 40, L"ALT", RGB(255,115,0), g_fTop);
+                int rx = W * 80 / 100 - 4;
+                text_at(dc, rx - aw, 10, ab, RGB(255,125,0), g_fLabel);
+                text_at(dc, rx - text_w(dc, L"ALT", g_fTop), 10 + (H*5/100) + 2, L"ALT", RGB(255,115,0), g_fTop);
             }
         }
-        /* Middle tier: speed digits with grid */
+        /* Middle tier: speed digits */
         {
+            int y1 = H * 22 / 100;
+            int y2 = H * 62 / 100;
             WCHAR nb[16];
             const WCHAR *unit = g_imperial ? T(S_MPH) : T(S_KMH);
             if (gpsOk) wsprintfW(nb, L"%d", speed_disp());
             else wcscpy(nb, L"--");
-            /* grid lines every 3px over speed area */
+            /* grid */
             {
                 int gx, gy;
-                for (gy = 68; gy <= 162; gy += 3) {
-                    for (gx = 20; gx <= 384; gx += 3) {
-                        /* draw a 1px dim dot */
+                for (gy = y1 + 4; gy <= y2 - 4; gy += 3)
+                    for (gx = 12; gx <= W * 80 / 100 - 8; gx += 3)
                         SetPixel(dc, gx, gy, RGB(52,12,2));
-                    }
-                }
             }
-            /* speed digits */
             {
                 int tw = text_w(dc, nb, g_fSpeed);
-                text_at(dc, (20+384)/2 - tw/2, 80, nb, RGB(255,175,25), g_fSpeed);
+                int cx = (12 + (W * 80 / 100 - 4)) / 2;
+                text_at(dc, cx - tw / 2, y1 + 6, nb, RGB(255,175,25), g_fSpeed);
             }
-            /* unit label bottom-right */
             {
                 int uw = text_w(dc, unit, g_fUnit);
-                text_at(dc, 384 - uw - 4, 140, unit, RGB(255,125,0), g_fUnit);
+                int rx = W * 80 / 100 - 4;
+                text_at(dc, rx - uw, y2 - (H*8/100) - 2, unit, RGB(255,125,0), g_fUnit);
             }
         }
         /* Bottom tier: ODO and MAX */
         {
+            int y2 = H * 62 / 100;
             int ow, of;
             odo_disp(&ow, &of);
             WCHAR obuf[32];
             wsprintfW(obuf, L"ODO %d.%d", ow, of);
-            text_at(dc, 24, 174, obuf, RGB(255,115,0), g_fLabel);
+            text_at(dc, 12, y2 + 4, obuf, RGB(255,115,0), g_fLabel);
             {
                 WCHAR mb[32];
                 wsprintfW(mb, L"MAX %d", speed_max_disp());
                 int mw = text_w(dc, mb, g_fLabel);
-                text_at(dc, 384 - mw - 4, 174, mb, RGB(255,115,0), g_fLabel);
+                int rx = W * 80 / 100 - 4;
+                text_at(dc, rx - mw, y2 + 4, mb, RGB(255,115,0), g_fLabel);
             }
         }
         /* Right bar column */
         {
-            /* top label */
-            text_at(dc, 400, 16, L"1/1", RGB(255,125,0), g_fTop);
-            /* 8 battery/signal blocks */
+            int rx = W * 80 / 100 + 4;
+            int rw = W - rx - 6;
+            text_at(dc, rx, 10, L"1/1", RGB(255,125,0), g_fTop);
             {
                 int batt = (g_batt_pct >= 0) ? g_batt_pct : 50;
                 int active = batt * 8 / 100; if (active < 0) active = 0; if (active > 8) active = 8;
-                /* if no fix, show signal bars instead */
                 int bars = 0;
                 if (!gpsOk || g_scanning) {
                     if (g_sats_view > 0) bars = (g_sats_view >= 8) ? 8 : (g_sats_view >= 4 ? 4 : 2);
@@ -1853,130 +1853,122 @@ static void draw_screen(HDC dc, int W, int H)
                 }
                 int i;
                 for (i = 0; i < 8; i++) {
-                    int y = 38 + i * 19;
+                    int y = 12 + (H*32/100) + i * ((H*12/100) + (H*3/100));
+                    if (y + (H*12/100) > H - 36) break;
                     COLORREF c = (i < active) ? RGB(255,175,25) : RGB(78,20,4);
-                    fill(dc, 400, y, 32, 15, c);
+                    fill(dc, rx, y, rw - 8, H*12/100, c);
                     {
                         HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,115,0));
                         HPEN op = (HPEN)SelectObject(dc, pen);
                         HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
-                        Rectangle(dc, 400, y, 432, y + 15);
+                        Rectangle(dc, rx, y, rx + (rw - 8), y + (H*12/100));
                         SelectObject(dc, op); SelectObject(dc, ob);
                         DeleteObject(pen);
                     }
                 }
             }
-            /* right scale ticks */
-            text_at(dc, 438, 20, L"1/1", RGB(255,125,0), g_fTop);
-            text_at(dc, 438, 110, L"mid", RGB(255,115,0), g_fTop);
+            text_at(dc, rx + rw - 12, 12, L"1/1", RGB(255,125,0), g_fTop);
+            text_at(dc, rx + rw - 12, (H*45/100), L"mid", RGB(255,115,0), g_fTop);
             {
-                /* R at bottom, red if low batt or no fix */
                 COLORREF rc = RGB(255,115,0);
                 if ((g_batt_pct >= 0 && g_batt_pct < 20) || !gpsOk || g_scanning) rc = RGB(255,45,15);
-                text_at(dc, 438, 200, L"R", rc, g_fLabel);
+                text_at(dc, rx + rw - 12, H - 40, L"R", rc, g_fLabel);
             }
         }
     }
 
-    /* ---------- BX DIGIT FULL-WIDTH VFD SCREEN ---------- */
+    /* ---------- EL_GLOW CITROEN BX (320x240) ---------- */
     if (elglow_theme()) {
-        /* background already filled; draw bezel + contents */
-        int bx, by, bw, bh;
-        /* Outer bezel */
+        /* bezel */
         {
             HPEN pen = CreatePen(PS_SOLID, 2, RGB(35,255,175));
             HBRUSH br = CreateSolidBrush(RGB(5,11,9));
             HPEN op = (HPEN)SelectObject(dc, pen);
             HBRUSH ob = (HBRUSH)SelectObject(dc, br);
-            RoundRect(dc, 8, 6, 472, 228, 16, 16);
+            RoundRect(dc, 4, 4, W - 4, H - 34, 12, 12);
             SelectObject(dc, op); SelectObject(dc, ob);
             DeleteObject(pen); DeleteObject(br);
         }
-        /* Top status bar graphs */
+        /* top bars */
         {
-            int i, active;
+            int i, active, bars;
             int batt = (g_batt_pct >= 0) ? g_batt_pct : 50;
             active = batt * 8 / 100; if (active < 0) active = 0; if (active > 8) active = 8;
             for (i = 0; i < 8; i++) {
-                int x = 24 + i * 19;
+                int x = 14 + i * 12;
                 COLORREF c = (i < active) ? RGB(35,255,175) : RGB(12,58,44);
-                fill(dc, x, 16, 16, 16, c);
+                fill(dc, x, 12, 10, 12, c);
                 {
                     HPEN pen = CreatePen(PS_SOLID, 1, RGB(35,255,175));
                     HPEN op = (HPEN)SelectObject(dc, pen);
                     HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
-                    Rectangle(dc, x, 16, x + 16, 32);
+                    Rectangle(dc, x, 12, x + 10, 24);
                     SelectObject(dc, op); SelectObject(dc, ob);
                     DeleteObject(pen);
                 }
             }
-            /* battery label */
-            text_at(dc, 180, 18, L"BAT", RGB(35,255,175), g_fTop);
-            /* GPS signal bars */
-            {
-                int bars = 0;
-                if (gpsOk && g_hdop10 != 9999 && g_hdop10 < 200) {
-                    if (g_hdop10 <= 10) bars = 8;
-                    else if (g_hdop10 <= 20) bars = 6;
-                    else if (g_hdop10 <= 40) bars = 4;
-                    else if (g_hdop10 <= 80) bars = 2;
-                } else if (g_sats_view > 0) {
-                    bars = (g_sats_view >= 8) ? 6 : (g_sats_view >= 4 ? 4 : 2);
-                }
-                if (bars > 8) bars = 8;
-                for (i = 0; i < 8; i++) {
-                    int x = 305 + i * 19;
-                    COLORREF c = (i < bars) ? RGB(35,255,175) : RGB(12,58,44);
-                    fill(dc, x, 16, 16, 16, c);
-                    {
-                        HPEN pen = CreatePen(PS_SOLID, 1, RGB(35,255,175));
-                        HPEN op = (HPEN)SelectObject(dc, pen);
-                        HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
-                        Rectangle(dc, x, 16, x + 16, 32);
-                        SelectObject(dc, op); SelectObject(dc, ob);
-                        DeleteObject(pen);
-                    }
-                }
-                /* sat count label */
-                {
-                    WCHAR sb[16];
-                    wsprintfW(sb, L"SAT %d", gpsOk ? g_sats : g_sats_view);
-                    text_at(dc, 462 - text_w(dc, sb, g_fTop), 18, sb, RGB(35,255,175), g_fTop);
-                }
+            bars = 0;
+            if (gpsOk && g_hdop10 != 9999 && g_hdop10 < 200) {
+                if (g_hdop10 <= 10) bars = 8;
+                else if (g_hdop10 <= 20) bars = 6;
+                else if (g_hdop10 <= 40) bars = 4;
+                else if (g_hdop10 <= 80) bars = 2;
+            } else if (g_sats_view > 0) {
+                bars = (g_sats_view >= 8) ? 6 : (g_sats_view >= 4 ? 4 : 2);
             }
-        }
-        /* Speed arch segments */
-        {
-            int spd = gpsOk ? g_speed_kmh : 0;
-            double maxv = g_imperial ? 120.0 : 180.0;
-            int filled = (int)((double)spd / maxv * 28.0 + 0.5);
-            int i;
-            if (filled < 0) filled = 0; if (filled > 28) filled = 28;
-            for (i = 0; i < 28; i++) {
-                double t = (double)i / 27.0;
-                int x = 24 + (int)(t * (456 - 24 - 10));
-                int ay = (int)(112 - 72.0 * my_sin(t * PI_D));
-                COLORREF c = RGB(12,58,44);
-                if (i < filled) c = RGB(35,255,175);
-                if (i >= 24 && i < filled) c = RGB(255,175,30); /* top-end amber */
-                fill(dc, x, ay, 10, 8, c);
+            if (bars > 8) bars = 8;
+            for (i = 0; i < 8; i++) {
+                int x = (W - 14) - (8 - i) * 12;
+                COLORREF c = (i < bars) ? RGB(35,255,175) : RGB(12,58,44);
+                fill(dc, x, 12, 10, 12, c);
                 {
                     HPEN pen = CreatePen(PS_SOLID, 1, RGB(35,255,175));
                     HPEN op = (HPEN)SelectObject(dc, pen);
                     HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
-                    Rectangle(dc, x, ay, x + 10, ay + 8);
+                    Rectangle(dc, x, 12, x + 10, 24);
+                    SelectObject(dc, op); SelectObject(dc, ob);
+                    DeleteObject(pen);
+                }
+            }
+            {
+                WCHAR sb[16];
+                wsprintfW(sb, L"SAT %d", gpsOk ? g_sats : g_sats_view);
+                text_at(dc, W - 14 - text_w(dc, sb, g_fTop), 14, sb, RGB(35,255,175), g_fTop);
+            }
+        }
+        /* speed arch 24 segments */
+        {
+            int spd = gpsOk ? g_speed_kmh : 0;
+            double maxv = g_imperial ? 120.0 : 180.0;
+            int filled = (int)((double)spd / maxv * 24.0 + 0.5);
+            int i;
+            if (filled < 0) filled = 0; if (filled > 24) filled = 24;
+            for (i = 0; i < 24; i++) {
+                double t = (double)i / 23.0;
+                int x = 16 + (int)(t * (W - 32 - 8));
+                int ay = (int)(86 - 56.0 * my_sin(t * PI_D));
+                COLORREF c = RGB(12,58,44);
+                if (i < filled) c = RGB(35,255,175);
+                if (i >= 20 && i < filled) c = RGB(255,175,30);
+                fill(dc, x, ay, 8, 6, c);
+                {
+                    HPEN pen = CreatePen(PS_SOLID, 1, RGB(35,255,175));
+                    HPEN op = (HPEN)SelectObject(dc, pen);
+                    HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+                    Rectangle(dc, x, ay, x + 8, ay + 6);
                     SelectObject(dc, op); SelectObject(dc, ob);
                     DeleteObject(pen);
                 }
             }
             /* scale markers */
             {
-                int scales[7] = {0,30,60,90,120,150,180};
+                int scales[5] = {0,40,80,120,160};
                 int si;
-                for (si = 0; si < 7; si++) {
-                    double v = (double)scales[si] / 180.0;
-                    int x = 24 + (int)(v * (456 - 24 - 10));
-                    int ay = (int)(112 - 72.0 * my_sin(v * PI_D)) - 14;
+                for (si = 0; si < 5; si++) {
+                    double v = (double)scales[si] / 160.0;
+                    if (v > 1.0) v = 1.0;
+                    int x = 16 + (int)(v * (W - 32 - 8));
+                    int ay = (int)(86 - 56.0 * my_sin(v * PI_D)) - 10;
                     WCHAR nb[8];
                     if (g_imperial) {
                         int mph = (int)(scales[si] * 0.6213712 + 0.5);
@@ -1986,10 +1978,13 @@ static void draw_screen(HDC dc, int W, int H)
                 }
             }
         }
-        /* Highway beams */
+        /* highway beams */
         {
-            POINT leftBeam[4] = { {55,220}, {110,220}, {195,105}, {175,105} };
-            POINT rightBeam[4] = { {370,220}, {425,220}, {305,105}, {285,105} };
+            int x1 = 36, x2 = 74, x3 = 116, x4 = 130;
+            int yb = H - 40, yt = 84;
+            POINT leftBeam[4] = { {x1,yb}, {x2,yb}, {x4,yt}, {x3,yt} };
+            int rx1 = W - 36, rx2 = W - 74, rx3 = W - 116, rx4 = W - 130;
+            POINT rightBeam[4] = { {rx1,yb}, {rx2,yb}, {rx4,yt}, {rx3,yt} };
             HBRUSH br = CreateSolidBrush(RGB(16,85,64));
             HPEN pen = CreatePen(PS_SOLID, 1, RGB(35,255,175));
             HBRUSH ob = (HBRUSH)SelectObject(dc, br);
@@ -1999,98 +1994,89 @@ static void draw_screen(HDC dc, int W, int H)
             SelectObject(dc, ob); SelectObject(dc, op);
             DeleteObject(br); DeleteObject(pen);
         }
-        /* Center speed readout */
+        /* center speed box */
         {
             WCHAR nb[16];
-            int unitW;
             if (gpsOk) wsprintfW(nb, L"%d", speed_disp());
             else wcscpy(nb, L"--");
-            /* unit label */
             {
                 const WCHAR *u = g_imperial ? T(S_MPH) : T(S_KMH);
                 int uw = text_w(dc, u, g_fTop);
-                text_at(dc, (175+305)/2 - uw/2, 124, u, RGB(35,255,175), g_fTop);
+                text_at(dc, W/2 - uw/2, 96, u, RGB(35,255,175), g_fTop);
             }
-            /* box */
             {
                 HPEN pen = CreatePen(PS_SOLID, 2, RGB(35,255,175));
                 HBRUSH br = CreateSolidBrush(RGB(5,11,9));
                 HPEN op = (HPEN)SelectObject(dc, pen);
                 HBRUSH ob = (HBRUSH)SelectObject(dc, br);
-                Rectangle(dc, 185, 144, 295, 210);
+                Rectangle(dc, W/2 - 42, 114, W/2 + 42, 194);
                 SelectObject(dc, op); SelectObject(dc, ob);
                 DeleteObject(pen); DeleteObject(br);
             }
-            /* digits */
             {
                 int tw = text_w(dc, nb, g_fSpeed);
-                text_at(dc, (185+295)/2 - tw/2, 150, nb, RGB(160,255,225), g_fSpeed);
+                text_at(dc, W/2 - tw/2, 130, nb, RGB(160,255,225), g_fSpeed);
             }
         }
-        /* Left telemetry boxes */
+        /* flanking boxes */
         {
-            /* compass + altitude box 1 */
+            /* left */
             {
                 HPEN pen = CreatePen(PS_SOLID, 1, RGB(35,255,175));
                 HBRUSH br = CreateSolidBrush(RGB(5,11,9));
                 HPEN op = (HPEN)SelectObject(dc, pen);
                 HBRUSH ob = (HBRUSH)SelectObject(dc, br);
-                Rectangle(dc, 22, 118, 118, 154);
-                Rectangle(dc, 22, 162, 118, 198);
+                Rectangle(dc, 12, 96, 78, 134);
+                Rectangle(dc, 12, 140, 78, 178);
                 SelectObject(dc, op); SelectObject(dc, ob);
                 DeleteObject(pen); DeleteObject(br);
             }
-            /* compass heading */
             {
                 WCHAR cb[40];
                 static const WCHAR *DIRS[8] = { L"N",L"NE",L"E",L"SE",L"S",L"SW",L"W",L"NW" };
                 int cdx = (g_course + 22) / 45;
                 if (cdx > 7) cdx = 0;
-                if (gpsOk && g_course_ok) wsprintfW(cb, L"%s %d\xb0", DIRS[cdx], g_course);
+                if (gpsOk && g_course_ok) wsprintfW(cb, L"%s %d", DIRS[cdx], g_course);
                 else wcscpy(cb, L"--");
-                text_at(dc, 28, 124, cb, RGB(35,255,175), g_fLabel);
-                text_at(dc, 28, 138, L"HDG", RGB(12,58,44), g_fTop);
+                text_at(dc, 16, 100, cb, RGB(35,255,175), g_fLabel);
+                text_at(dc, 16, 116, L"HDG", RGB(12,58,44), g_fTop);
             }
-            /* altitude */
             {
                 WCHAR ab[32];
                 const WCHAR *au = g_imperial ? T(S_FT) : T(S_M);
                 if (gpsOk && g_alt_ok) wsprintfW(ab, L"%d %s", alt_disp(), au);
                 else if (gpsOk) wsprintfW(ab, L"--- %s", au);
                 else wsprintfW(ab, L"-- %s", au);
-                text_at(dc, 28, 168, ab, RGB(35,255,175), g_fLabel);
-                text_at(dc, 28, 182, L"ALT", RGB(12,58,44), g_fTop);
+                text_at(dc, 16, 144, ab, RGB(35,255,175), g_fLabel);
+                text_at(dc, 16, 160, L"ALT", RGB(12,58,44), g_fTop);
             }
-        }
-        /* Right telemetry boxes */
-        {
-            HPEN pen = CreatePen(PS_SOLID, 1, RGB(35,255,175));
-            HBRUSH br = CreateSolidBrush(RGB(5,11,9));
-            HPEN op = (HPEN)SelectObject(dc, pen);
-            HBRUSH ob = (HBRUSH)SelectObject(dc, br);
-            Rectangle(dc, 362, 118, 458, 154);
-            Rectangle(dc, 362, 162, 458, 198);
-            SelectObject(dc, op); SelectObject(dc, ob);
-            DeleteObject(pen); DeleteObject(br);
-            /* ODO */
+            /* right */
+            {
+                HPEN pen = CreatePen(PS_SOLID, 1, RGB(35,255,175));
+                HBRUSH br = CreateSolidBrush(RGB(5,11,9));
+                HPEN op = (HPEN)SelectObject(dc, pen);
+                HBRUSH ob = (HBRUSH)SelectObject(dc, br);
+                Rectangle(dc, W - 78, 96, W - 12, 134);
+                Rectangle(dc, W - 78, 140, W - 12, 178);
+                SelectObject(dc, op); SelectObject(dc, ob);
+                DeleteObject(pen); DeleteObject(br);
+            }
             {
                 int ow, of;
                 odo_disp(&ow, &of);
                 WCHAR obuf[32];
                 wsprintfW(obuf, L"ODO %d.%d", ow, of);
-                text_at(dc, 368, 124, obuf, RGB(35,255,175), g_fLabel);
+                text_at(dc, W - 74, 100, obuf, RGB(35,255,175), g_fLabel);
             }
-            /* MAX */
             {
                 WCHAR mb[32];
                 wsprintfW(mb, L"MAX %d", speed_max_disp());
-                text_at(dc, 368, 138, mb, RGB(35,255,175), g_fLabel);
+                text_at(dc, W - 74, 116, mb, RGB(35,255,175), g_fLabel);
             }
-            /* units label in second box */
             {
                 const WCHAR *u = g_imperial ? T(S_MI) : T(S_KM);
-                text_at(dc, 368, 168, (WCHAR*)u, RGB(12,58,44), g_fTop);
-                text_at(dc, 368, 182, g_imperial ? L"MPH" : L"KMH", RGB(35,255,175), g_fLabel);
+                text_at(dc, W - 74, 144, (WCHAR*)u, RGB(12,58,44), g_fTop);
+                text_at(dc, W - 74, 160, g_imperial ? L"MPH" : L"KMH", RGB(35,255,175), g_fLabel);
             }
         }
     }
