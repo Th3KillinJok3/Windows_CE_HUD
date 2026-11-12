@@ -1427,14 +1427,11 @@ static void dm_dot(HDC dc, int x, int y, int scale, int gap,
                    int lit, COLORREF on, COLORREF off, COLORREF grid)
 {
     int sz = scale + gap;
+    (void)grid;                                        /* grid overlay removed */
     if (lit) {
-        fill(dc, x, y, sz, sz, grid);                  /* dark cell frame */
-        fill(dc, x + 1, y + 1, sz - 1, sz - 1, on);    /* glowing core   */
-        if (scale > 3)                                  /* inner grid line */
-            fill(dc, x + 1, y + sz - 1, sz - 1, 1, grid);
+        fill(dc, x, y, sz, sz, on);                    /* solid lit dot */
     } else {
-        fill(dc, x, y, sz, sz, grid);
-        fill(dc, x + 1, y + 1, sz - 2, sz - 2, off);
+        fill(dc, x, y, sz, sz, off);                   /* solid unlit dot */
     }
 }
 
