@@ -2361,7 +2361,7 @@ static void draw_screen(HDC dc, int W, int H)
         int by2 = H - BOT_H;
         int px = 6;
         int avail = W - 62 - px;
-        COLORREF bg = TACD, fg = TAC;
+        COLORREF bg = RGB(40,14,4), fg = RGB(255,175,25);
         WCHAR wbuf[160];
 
         if (g_scanning)                { bg = TWNBG; fg = TWN; }
@@ -2390,30 +2390,30 @@ static void draw_screen(HDC dc, int W, int H)
         /* THEME button - bottom */
         {
             int mx = W - 116;
-            fill(dc, mx, by2, 54, BOT_H, TBTN);
+            fill(dc, mx, by2, 54, BOT_H, RGB(78,20,4));
             {
-                HPEN pen = CreatePen(PS_SOLID, 1, TBTNL);
+                HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,115,0));
                 HPEN op = (HPEN)SelectObject(dc, pen);
                 HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
                 Rectangle(dc, mx, by2, mx + 54, by2 + BOT_H);
                 SelectObject(dc, op); SelectObject(dc, ob);
                 DeleteObject(pen);
             }
-            text_center(dc, mx + 27, by2 + (BOT_H - 12) / 2, L"THEME", TTEXT, g_fTop);
+            text_center(dc, mx + 27, by2 + (BOT_H - 12) / 2, L"THEME", RGB(255,175,25), g_fTop);
         }
         /* MENU button - bottom right */
         {
             int mx = W - 58;
-            fill(dc, mx, by2, 54, BOT_H, TBTN);
+            fill(dc, mx, by2, 54, BOT_H, RGB(78,20,4));
             {
-                HPEN pen = CreatePen(PS_SOLID, 1, TBTNL);
+                HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,115,0));
                 HPEN op = (HPEN)SelectObject(dc, pen);
                 HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
                 Rectangle(dc, mx, by2, mx + 54, by2 + BOT_H);
                 SelectObject(dc, op); SelectObject(dc, ob);
                 DeleteObject(pen);
             }
-            text_center(dc, mx + 27, by2 + (BOT_H - 12) / 2, L"MENU", TTEXT, g_fTop);
+            text_center(dc, mx + 27, by2 + (BOT_H - 12) / 2, L"MENU", RGB(255,175,25), g_fTop);
         }
     }
     /* on-screen settings menu overlay */
