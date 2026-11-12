@@ -97,8 +97,8 @@ static int g_menu_open = 0;      /* on-screen settings menu */
 #define TBTNL   (THEMES[g_theme].btnLine)
 
 /* Theme style helpers - which rendering path a theme uses. */
-static int dotmatrix_theme(void) { return (g_theme == 0 || g_theme == 4); }
-static int vfd_theme(void)      { return (g_theme == 4); }
+static int dotmatrix_theme(void) { return (g_theme == 0); }
+static int toyota_theme(void)   { return (g_theme == 4); }
 static int elglow_theme(void)   { return (g_theme == 5); }
 
 
@@ -1754,8 +1754,146 @@ static void draw_screen(HDC dc, int W, int H)
         text_center(dc, W - X_W / 2, (ph - 14) / 2 + 1, L"X", TER, g_fBtn);
     }
 
+    /* ---------- TOYOTA VERSO DOT-MATRIX MFD ---------- */
+    if (toyota_theme()) {
+        /* outer surround + LCD frame */
+        fill(dc, 0, 0, W, H, RGB(4,2,1));
+        {
+            HPEN pen = CreatePen(PS_SOLID, 2, RGB(255,95,0));
+            HBRUSH br = CreateSolidBrush(RGB(52,12,2));
+            HPEN op = (HPEN)SelectObject(dc, pen);
+            HBRUSH ob = (HBRUSH)SelectObject(dc, br);
+            RoundRect(dc, 12, 8, 468, 226, 8, 8);
+            SelectObject(dc, op); SelectObject(dc, ob);
+            DeleteObject(pen); DeleteObject(br);
+        }
+        /* vertical divider at x=388 */
+        {
+            HPEN pen = CreatePen(PS_SOLID, 2, RGB(255,115,0));
+            HPEN op = (HPEN)SelectObject(dc, pen);
+            MoveToEx(dc, 388, 10, NULL);
+            LineTo(dc, 388, 224);
+            SelectObject(dc, op);
+            DeleteObject(pen);
+        }
+        /* horizontal dividers at y=64 and 166 */
+        {
+            HPEN pen = CreatePen(PS_SOLID, 2, RGB(255,115,0));
+            HPEN op = (HPEN)SelectObject(dc, pen);
+            MoveToEx(dc, 20, 64, NULL); LineTo(dc, 384, 64);
+            MoveToEx(dc, 20, 166, NULL); LineTo(dc, 384, 166);
+            SelectObject(dc, op);
+            DeleteObject(pen);
+        }
+        /* Top tier: Compass left, Altitude right */
+        {
+            /* compass */
+            {
+                WCHAR cb[40];
+                static const WCHAR *DIRS[8] = { L"N",L"NE",L"E",L"SE",L"S",L"SW",L"W",L"NW" };
+                int cdx = (g_course + 22) / 45;
+                if (cdx > 7) cdx = 0;
+                if (gpsOk && g_course_ok) wsprintfW(cb, L"%s %d", DIRS[cdx], g_course);
+                else wcscpy(cb, L"--");
+                text_at(dc, 24, 20, cb, RGB(255,125,0), g_fLabel);
+                text_at(dc, 24, 40, L"HDG", RGB(255,115,0), g_fTop);
+            }
+            /* altitude */
+            {
+                WCHAR ab[32];
+                const WCHAR *au = g_imperial ? T(S_FT) : T(S_M);
+                if (gpsOk && g_alt_ok) wsprintfW(ab, L"%d %s", alt_disp(), au);
+                else if (gpsOk) wsprintfW(ab, L"--- %s", au);
+                else wsprintfW(ab, L"-- %s", au);
+                int aw = text_w(dc, ab, g_fLabel);
+                text_at(dc, 384 - aw - 4, 20, ab, RGB(255,125,0), g_fLabel);
+                text_at(dc, 384 - text_w(dc, L"ALT", g_fTop) - 4, 40, L"ALT", RGB(255,115,0), g_fTop);
+            }
+        }
+        /* Middle tier: speed digits with grid */
+        {
+            WCHAR nb[16];
+            const WCHAR *unit = g_imperial ? T(S_MPH) : T(S_KMH);
+            if (gpsOk) wsprintfW(nb, L"%d", speed_disp());
+            else wcscpy(nb, L"--");
+            /* grid lines every 3px over speed area */
+            {
+                int gx, gy;
+                for (gy = 68; gy <= 162; gy += 3) {
+                    for (gx = 20; gx <= 384; gx += 3) {
+                        /* draw a 1px dim dot */
+                        SetPixel(dc, gx, gy, RGB(52,12,2));
+                    }
+                }
+            }
+            /* speed digits */
+            {
+                int tw = text_w(dc, nb, g_fSpeed);
+                text_at(dc, (20+384)/2 - tw/2, 80, nb, RGB(255,175,25), g_fSpeed);
+            }
+            /* unit label bottom-right */
+            {
+                int uw = text_w(dc, unit, g_fUnit);
+                text_at(dc, 384 - uw - 4, 140, unit, RGB(255,125,0), g_fUnit);
+            }
+        }
+        /* Bottom tier: ODO and MAX */
+        {
+            int ow, of;
+            odo_disp(&ow, &of);
+            WCHAR obuf[32];
+            wsprintfW(obuf, L"ODO %d.%d", ow, of);
+            text_at(dc, 24, 174, obuf, RGB(255,115,0), g_fLabel);
+            {
+                WCHAR mb[32];
+                wsprintfW(mb, L"MAX %d", speed_max_disp());
+                int mw = text_w(dc, mb, g_fLabel);
+                text_at(dc, 384 - mw - 4, 174, mb, RGB(255,115,0), g_fLabel);
+            }
+        }
+        /* Right bar column */
+        {
+            /* top label */
+            text_at(dc, 400, 16, L"1/1", RGB(255,125,0), g_fTop);
+            /* 8 battery/signal blocks */
+            {
+                int batt = (g_batt_pct >= 0) ? g_batt_pct : 50;
+                int active = batt * 8 / 100; if (active < 0) active = 0; if (active > 8) active = 8;
+                /* if no fix, show signal bars instead */
+                int bars = 0;
+                if (!gpsOk || g_scanning) {
+                    if (g_sats_view > 0) bars = (g_sats_view >= 8) ? 8 : (g_sats_view >= 4 ? 4 : 2);
+                    active = bars;
+                }
+                int i;
+                for (i = 0; i < 8; i++) {
+                    int y = 38 + i * 19;
+                    COLORREF c = (i < active) ? RGB(255,175,25) : RGB(78,20,4);
+                    fill(dc, 400, y, 32, 15, c);
+                    {
+                        HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,115,0));
+                        HPEN op = (HPEN)SelectObject(dc, pen);
+                        HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+                        Rectangle(dc, 400, y, 432, y + 15);
+                        SelectObject(dc, op); SelectObject(dc, ob);
+                        DeleteObject(pen);
+                    }
+                }
+            }
+            /* right scale ticks */
+            text_at(dc, 438, 20, L"1/1", RGB(255,125,0), g_fTop);
+            text_at(dc, 438, 110, L"mid", RGB(255,115,0), g_fTop);
+            {
+                /* R at bottom, red if low batt or no fix */
+                COLORREF rc = RGB(255,115,0);
+                if ((g_batt_pct >= 0 && g_batt_pct < 20) || !gpsOk || g_scanning) rc = RGB(255,45,15);
+                text_at(dc, 438, 200, L"R", rc, g_fLabel);
+            }
+        }
+    }
+
     /* ---------- BX DIGIT FULL-WIDTH VFD SCREEN ---------- */
-    if (bx_theme()) {
+    if (elglow_theme()) {
         /* background already filled; draw bezel + contents */
         int bx, by, bw, bh;
         /* Outer bezel */
@@ -1972,7 +2110,7 @@ static void draw_screen(HDC dc, int W, int H)
     }
 
     /* ---------- SPEED ---------- */
-    if (!bx_theme()) {
+    if (!elglow_theme() && !toyota_theme()) {
     if (gpsOk) wsprintfW(buf,L"%d",g_speed_kmh);
     else wcscpy(buf,L"--");
     /* Speed block: vertically centred in the free area between the top bar
@@ -2129,7 +2267,7 @@ static void draw_screen(HDC dc, int W, int H)
         }
     }
     }
-    if (!bx_theme()) {
+    if (!elglow_theme() && !toyota_theme()) {
     {
         /* compass (left) + max speed (right) */
         static const WCHAR *DIRS[8] = { L"N",L"NE",L"E",L"SE",L"S",L"SW",L"W",L"NW" };
@@ -2147,7 +2285,7 @@ static void draw_screen(HDC dc, int W, int H)
         text_center(dc, W/2 + 70, yrow, cb, TDIM, g_fLabel);
     }
 
-    if (!bx_theme()) {
+    if (!elglow_theme() && !toyota_theme()) {
     /* ---------- PANELS: odometer + altitude (above the button row) ---------- */
     {
         int panel_h = 46;
