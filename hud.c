@@ -243,32 +243,11 @@ static void lang_detect(void)
 #define M_TO_FT     3.2808399
 #define KM_TO_MI    0.6213712
 
-/* Speed for display, already in the active unit. */
-static int speed_disp(void)
-{
-    if (!g_imperial) return g_speed_kmh;
-    return (int)(g_speed_kmh * KMH_TO_MPH + 0.5);
-}
-static int speed_max_disp(void)
-{
-    if (!g_imperial) return g_speed_max;
-    return (int)(g_speed_max * KMH_TO_MPH + 0.5);
-}
-/* Odometer in the active unit, whole part + one decimal. */
-static void odo_disp(int *whole, int *frac)
-{
-    double v = g_imperial ? (g_odo_km * KM_TO_MI) : g_odo_km;
-    int w = (int)v;
-    int f = (int)((v - w) * 10.0);
-    if (f < 0) f = 0;
-    if (f > 9) f = 9;
-    *whole = w; *frac = f;
-}
-static int alt_disp(void)
-{
-    if (!g_imperial) return g_alt_m;
-    return (int)(g_alt_m * M_TO_FT + 0.5);
-}
+/* Display helpers - defined after the GPS state globals they read. */
+static int  speed_disp(void);
+static int  speed_max_disp(void);
+static void odo_disp(int *whole, int *frac);
+static int  alt_disp(void);
 
 /* ============ LOG (no buffering) ============ */
 static FILE *g_log = NULL;
@@ -334,6 +313,33 @@ static volatile DWORD g_last_rx_tick;
 
 /* ============ LICZNIK ============ */
 static double g_odo_km = 0.0;
+
+/* ============ UNIT CONVERSION (bodies) ============ */
+/* Everything is stored in metric; these only convert for display. */
+static int speed_disp(void)
+{
+    if (!g_imperial) return g_speed_kmh;
+    return (int)(g_speed_kmh * KMH_TO_MPH + 0.5);
+}
+static int speed_max_disp(void)
+{
+    if (!g_imperial) return g_speed_max;
+    return (int)(g_speed_max * KMH_TO_MPH + 0.5);
+}
+static void odo_disp(int *whole, int *frac)
+{
+    double v = g_imperial ? (g_odo_km * KM_TO_MI) : g_odo_km;
+    int w = (int)v;
+    int f = (int)((v - w) * 10.0);
+    if (f < 0) f = 0;
+    if (f > 9) f = 9;
+    *whole = w; *frac = f;
+}
+static int alt_disp(void)
+{
+    if (!g_imperial) return g_alt_m;
+    return (int)(g_alt_m * M_TO_FT + 0.5);
+}
 static double g_last_lat, g_last_lon;
 static int    g_have_last;
 static DWORD  g_last_tick;
