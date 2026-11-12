@@ -143,7 +143,7 @@ static const WCHAR *STR_TABLE[LANG_COUNT][S_COUNT] = {
             L"sat", L"km/h", L"mph", L"m", L"ft", L"km", L"mi" },
 };
 
-static int g_lang = LANG_PL;
+static int g_lang = LANG_PL;   /* default: Polish */
 
 /* Shortcut: localized string by id. */
 static const WCHAR *T(int id)
@@ -233,7 +233,7 @@ static void lang_detect(void)
     case 0x13: g_lang = LANG_NL; break;   /* Dutch         */
     case 0x16: g_lang = LANG_PT; break;   /* Portuguese    */
     case 0x05: g_lang = LANG_CZ; break;   /* Czech         */
-    default:   g_lang = LANG_EN; break;
+    default:   g_lang = LANG_PL; break;   /* PL is the default */
     }
     logf_("jezyk z systemu: %s\n", LANG_CODES[g_lang]);
 }
@@ -1598,17 +1598,29 @@ static void draw_screen(HDC dc, int W, int H)
     else wcscpy(buf,L"--");
     cx=W/2; spY=TOP_H + 6;
     {
-        WCHAR unit[] = L"km/h";
-        int wnum = text_w(dc, buf, g_fSpeed);
+        const WCHAR *unit = g_imperial ? T(S_MPH) : T(S_KMH);
         int wunit = text_w(dc, unit, g_fUnit);
         int gap = 10;
-        int total = wnum + gap + wunit;
-        int x0 = cx - total/2;
-        int hSpeed = text_h(dc, buf, g_fSpeed);
-        int hUnit  = text_h(dc, unit, g_fUnit);
-        int yUnit = spY + hSpeed - hUnit - 6;
-        text_at(dc, x0, spY, buf, gpsOk?TTEXT:TDIM, g_fSpeed);
-        text_at(dc, x0 + wnum + gap, yUnit, unit, TDIM, g_fUnit);
+        int hUnit = text_h(dc, unit, g_fUnit);
+
+        if (g_theme == 0) {
+            /* VERSO: big dot-matrix digits */
+            int sc = 9, gp = 2;
+            int wn = dm_w(buf, sc, gp);
+            int hh = dm_h(sc, gp);
+            int total = wn + gap + wunit;
+            int x0 = cx - total / 2;
+            dm_text(dc, x0, spY, buf, sc, gp, gpsOk, TM_ON, TM_OFF, TM_GRID);
+            text_at(dc, x0 + wn + gap, spY + hh - hUnit - 4, unit, TDIM, g_fUnit);
+        } else {
+            int wnum = text_w(dc, buf, g_fSpeed);
+            int total = wnum + gap + wunit;
+            int x0 = cx - total/2;
+            int hSpeed = text_h(dc, buf, g_fSpeed);
+            int yUnit = spY + hSpeed - hUnit - 6;
+            text_at(dc, x0, spY, buf, gpsOk?TTEXT:TDIM, g_fSpeed);
+            text_at(dc, x0 + wnum + gap, yUnit, unit, TDIM, g_fUnit);
+        }
     }
     {
         /* compass (left) + max speed (right) */
@@ -1638,7 +1650,15 @@ static void draw_screen(HDC dc, int W, int H)
         odo_disp(&odo_w, &odo_f);
         wsprintfW(buf,L"%d.%d %s",odo_w,odo_f,
                   g_imperial ? T(S_MI) : T(S_KM));
-        text_at(dc,14,by+20,buf,TAC,g_fVal);
+        if (g_theme == 0) {
+            WCHAR nb[24], ub[8];
+            wsprintfW(nb,L"%d.%d",odo_w,odo_f);
+            wsprintfW(ub,L"%s", g_imperial ? T(S_MI) : T(S_KM));
+            dm_text(dc,14,by+19,nb,3,1,1,TM_ON,TM_OFF,TM_GRID);
+            text_at(dc,14+dm_w(nb,3,1)+5,by+26,ub,TDIM,g_fLabel);
+        } else {
+            text_at(dc,14,by+20,buf,TAC,g_fVal);
+        }
 
         round_rect(dc,12+bw,by,bw,bh,8,TPANEL,TLINE);
         text_at(dc,20+bw,by+4,T(S_ALT),TDIM,g_fLabel);
@@ -1648,7 +1668,16 @@ static void draw_screen(HDC dc, int W, int H)
             else if (gpsOk)        wsprintfW(buf,L"--- %s",au);
             else                   wsprintfW(buf,L"-- %s",au);
         }
-        text_at(dc,20+bw,by+20,buf,gpsOk?TTEXT:TDIM,g_fVal);
+        if (g_theme == 0) {
+            WCHAR nb[24], ub[8];
+            if (gpsOk && g_alt_ok) wsprintfW(nb,L"%d",alt_disp());
+            else wcscpy(nb,L"---");
+            wsprintfW(ub,L"%s", g_imperial ? T(S_FT) : T(S_M));
+            dm_text(dc,20+bw,by+19,nb,3,1,gpsOk,TTEXT,TPANEL,TLINE);
+            text_at(dc,20+bw+dm_w(nb,3,1)+5,by+26,ub,TDIM,g_fLabel);
+        } else {
+            text_at(dc,20+bw,by+20,buf,gpsOk?TTEXT:TDIM,g_fVal);
+        }
     }
 
     /* ---------- BUTTON ROW at the bottom edge ---------- */
