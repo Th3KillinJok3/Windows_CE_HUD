@@ -178,6 +178,7 @@ static void ini_apply_line(const char *line)
     char key[32], val[48];
     const char *p = line;
     int k = 0, v = 0;
+    /* font= handling needs the candidate list, which is defined above */
 
     while (*p == ' ' || *p == '\t') p++;
     if (*p == 0 || *p == ';' || *p == '#' || *p == '[') return;
@@ -201,6 +202,24 @@ static void ini_apply_line(const char *line)
         int li = lang_from_code(val);
         if (li >= 0) { g_lang = li; logf_("ini: lang=%s\n", val); }
         else logf_("ini: nieznany jezyk '%s'\n", val);
+    } else if (_stricmp(key, "font") == 0) {
+        /* font = minecraft | terminal | fixedsys | ms sans serif | tahoma |
+         *        courier new | arial, or a plain index 0..6 */
+        int i, found = -1;
+        if (val[0] >= '0' && val[0] <= '9') {
+            int t = atoi(val);
+            if (t >= 0 && t < FONT_COUNT) found = t;
+        } else {
+            WCHAR wv[48];
+            int wi;
+            for (wi = 0; wi < 47 && val[wi]; wi++) wv[wi] = (WCHAR)val[wi];
+            wv[wi] = 0;
+            for (i = 0; i < FONT_COUNT; i++) {
+                if (_wcsicmp(wv, g_font_candidates[i]) == 0) { found = i; break; }
+            }
+        }
+        if (found >= 0) { g_font_ini = found; logf_("ini: font=%s (idx=%d)\n", val, found); }
+        else            { logf_("ini: nieznany font '%s'\n", val); }
     } else if (_stricmp(key, "clock24") == 0) {
         g_clock_24h = (atoi(val) != 0) ? 1 : 0;
         logf_("ini: clock24=%d\n", g_clock_24h);
@@ -452,6 +471,7 @@ static const WCHAR *g_font_candidates[] = {
     L"Arial"
 };
 static int g_font_pick = -1;
+static int g_font_ini  = -1;   /* font= from hud.ini, -1 = not set */
 static int font_works(const WCHAR *face, int size, int idx);
 #define FONT_COUNT ((int)(sizeof(g_font_candidates)/sizeof(g_font_candidates[0])))
 
@@ -490,7 +510,14 @@ static void font_resolve(void)
     for (i = 0; i < FONT_COUNT; i++) {
         if (font_works(g_font_candidates[i], -16, i)) { g_font_pick = i; break; }
     }
-    /* default font = Minecraft (index 0) when its TTF is loaded, else the
+    /* 1) hud.ini font= wins over everything (unless the face is missing) */
+    if (g_font_pick < 0 && g_font_ini >= 0 &&
+        font_works(g_font_candidates[g_font_ini], -16, g_font_ini)) {
+        g_font_pick = g_font_ini;
+        logf_("font z ini: %S (idx=%d)\n", g_font_candidates[g_font_pick], g_font_pick);
+        return;
+    }
+    /* 2) default font = Minecraft (index 0) when its TTF is loaded, else the
      * first face the system really has */
     if (g_font_pick < 0 && g_minecraft_on &&
         font_works(g_font_candidates[0], -16, 0))
