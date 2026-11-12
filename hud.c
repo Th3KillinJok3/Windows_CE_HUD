@@ -61,6 +61,7 @@ static const Theme THEMES[3] = {
       RGB(58,26,28), RGB(112,44,48) },
 };
 
+#define THEME_COUNT 3
 static const WCHAR *THEME_NAMES[THEME_COUNT] = {
     L"DOTMATRIX", L"EL_GLOW", L"CZERWONY"
 };
