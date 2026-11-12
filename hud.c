@@ -490,6 +490,11 @@ static void font_resolve(void)
     for (i = 0; i < FONT_COUNT; i++) {
         if (font_works(g_font_candidates[i], -16, i)) { g_font_pick = i; break; }
     }
+    /* default font = Minecraft (index 0) when its TTF is loaded, else the
+     * first face the system really has */
+    if (g_font_pick < 0 && g_minecraft_on &&
+        font_works(g_font_candidates[0], -16, 0))
+        g_font_pick = 0;
     if (g_font_pick < 0) g_font_pick = FONT_COUNT - 1;
     logf_("font wybrany: %S (idx=%d)\n", g_font_candidates[g_font_pick], g_font_pick);
 }
@@ -1633,29 +1638,51 @@ static void draw_screen(HDC dc, int W, int H)
     /* ---------- SPEED ---------- */
     if (gpsOk) wsprintfW(buf,L"%d",g_speed_kmh);
     else wcscpy(buf,L"--");
-    cx=W/2; spY=TOP_H + 6;
+    /* Speed block: vertically centred in the free area between the top bar
+     * and the compass row, horizontally centred on the whole screen. */
     {
         const WCHAR *unit = g_imperial ? T(S_MPH) : T(S_KMH);
         int wunit = text_w(dc, unit, g_fUnit);
-        int gap = 10;
         int hUnit = text_h(dc, unit, g_fUnit);
+        int gap = 12;
+        int freeTop  = TOP_H + 2;
+        int freeBot  = H - BOT_H - 8 - 14 - 6;   /* above the compass row */
+        int freeH    = freeBot - freeTop;
+
+        cx = W / 2;
+        if (freeH < 40) freeH = 40;
 
         if (g_theme == 0) {
-            /* VERSO: big dot-matrix digits */
-            int sc = 9, gp = 2;
-            int wn = dm_w(buf, sc, gp);
-            int hh = dm_h(sc, gp);
-            int total = wn + gap + wunit;
-            int x0 = cx - total / 2;
+            /* VERSO: large dot-matrix digits, scaled to the free height */
+            int sc = 12, gp = 2;
+            int wn, hh, total, x0;
+            /* shrink the dot size until the block fits the free area */
+            while (sc > 4 && dm_h(sc, gp) > freeH) sc--;
+            wn = dm_w(buf, sc, gp);
+            hh = dm_h(sc, gp);
+            total = wn + gap + wunit;
+            x0 = cx - total / 2;
+            spY = freeTop + (freeH - hh) / 2;
             dm_text(dc, x0, spY, buf, sc, gp, gpsOk, TM_ON, TM_OFF, TM_GRID);
             text_at(dc, x0 + wn + gap, spY + hh - hUnit - 4, unit, TDIM, g_fUnit);
         } else {
-            int wnum = text_w(dc, buf, g_fSpeed);
-            int total = wnum + gap + wunit;
-            int x0 = cx - total/2;
-            int hSpeed = text_h(dc, buf, g_fSpeed);
-            int yUnit = spY + hSpeed - hUnit - 6;
-            text_at(dc, x0, spY, buf, gpsOk?TTEXT:TDIM, g_fSpeed);
+            HFONT fBig = g_fSpeed;
+            int wh, wnum, total, x0, hSpeed, yUnit;
+            /* the built-in face is fixed-size: centre it instead */
+            wnum   = text_w(dc, buf, fBig);
+            hSpeed = text_h(dc, buf, fBig);
+            wh     = hSpeed;
+            if (wh > freeH && wh > 0) {
+                /* font too tall for the area - fall back to the value face */
+                fBig = g_fVal;
+                wnum = text_w(dc, buf, fBig);
+                hSpeed = text_h(dc, buf, fBig);
+            }
+            total = wnum + gap + wunit;
+            x0 = cx - total / 2;
+            spY = freeTop + (freeH - hSpeed) / 2;
+            yUnit = spY + hSpeed - hUnit - 6;
+            text_at(dc, x0, spY, buf, gpsOk?TTEXT:TDIM, fBig);
             text_at(dc, x0 + wnum + gap, yUnit, unit, TDIM, g_fUnit);
         }
     }
