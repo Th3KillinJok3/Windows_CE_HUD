@@ -1580,8 +1580,6 @@ static void seg_draw(HDC dc, int x1, int y1, int x2, int y2, int t,
 }
 
 }
-
-/* Draw one segment: if lit, paint a soft halo behind it then the lit segment. */
 static void seg_draw_lit(HDC dc, int x1, int y1, int x2, int y2, int t,
                          COLORREF lit, COLORREF glow)
 {
