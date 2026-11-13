@@ -1430,7 +1430,7 @@ static void text_center(HDC dc, int cx, int y, const WCHAR *s, COLORREF c, HFONT
 #define DOT_W 5
 #define DOT_H 7
 
-/* 5x7 font, one string per row, '#' = lit. Only the glyphs the HUD uses. */
+/* 5x7 font, one string per row, '1' = lit. Only the glyphs the HUD uses. */
 static const char *dm_glyph(WCHAR c)
 {
     switch (c) {
@@ -1518,7 +1518,7 @@ static void dm_text(HDC dc, int x, int y, const WCHAR *s, int scale, int gap,
             int r, c;
             for (r = 0; r < DOT_H; r++) {
                 for (c = 0; c < DOT_W; c++) {
-                    int lit = (g[r * DOT_W + c] == '#') && lit_all;
+                    int lit = (g[r * DOT_W + c] == '1') && lit_all;
                     dm_dot(dc, cx + c * (scale + gap), y + r * (scale + gap),
                            scale, gap, lit, on, off, grid);
                 }
@@ -1640,7 +1640,7 @@ static void DrawDotMatrixDigit(HDC dc, int x, int y, int w, int h, int digit,
     dotH = ch - 1; if (dotH < 1) dotH = 1;
     for (r = 0; r < 7; r++) {
         for (c = 0; c < 5; c++) {
-            int on = (g && g[r * DOT_W + c] == '#');
+            int on = (g && g[r * DOT_W + c] == '1');
             if (on) {
                 fill(dc, x + c * cw - 1, y + r * ch - 1, dotW + 2, dotH + 2, glow);
                 fill(dc, x + c * cw, y + r * ch, dotW, dotH, litColor);
