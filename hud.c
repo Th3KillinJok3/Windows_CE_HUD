@@ -1365,6 +1365,17 @@ static void fill(HDC dc, int x, int y, int w, int h, COLORREF c)
     FillRect(dc,&r,b); DeleteObject(b);
 }
 
+static COLORREF glow_mix(COLORREF c, int num, int den)
+{
+    int r = GetRValue(c) * num / den;
+    int g = GetGValue(c) * num / den;
+    int b = GetBValue(c) * num / den;
+    if (r > 255) r = 255;
+    if (g > 255) g = 255;
+    if (b > 255) b = 255;
+    return RGB(r, g, b);
+}
+
 static void text_at(HDC dc, int x, int y, const WCHAR *s, COLORREF c, HFONT f)
 {
     RECT r; HFONT old = (HFONT)SelectObject(dc,f);
@@ -1568,13 +1579,6 @@ static void seg_draw(HDC dc, int x1, int y1, int x2, int y2, int t,
     DeleteObject(pen);
 }
 
-static COLORREF glow_mix(COLORREF c, int num, int den)
-{
-    int r = GetRValue(c) * num / den;
-    int g = GetGValue(c) * num / den;
-    int b = GetBValue(c) * num / den;
-    if (r > 255) r = 255; if (g > 255) g = 255; if (b > 255) b = 255;
-    return RGB(r, g, b);
 }
 
 /* Draw one segment: if lit, paint a soft halo behind it then the lit segment. */
