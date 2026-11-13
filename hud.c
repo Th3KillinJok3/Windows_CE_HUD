@@ -2054,7 +2054,7 @@ static void draw_screen(HDC dc, int W, int H)
             wsprintfW(mb, L"MAX %d", speed_max_disp());
             {
                 int mw = dm_w(mnum, 3, 1);
-                int rx = W * 80 / 100 - 4;
+                int rx = W * 80 / 100 - 20;
                 dm_text(dc, rx - mw, y2 + 18, mnum, 3, 1, 1,
                         RGB(255,175,25), RGB(78,20,4), RGB(52,12,2));
             }
