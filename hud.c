@@ -1470,16 +1470,18 @@ static int dm_h(int scale, int gap)
     return DOT_H * (scale + gap) - gap;
 }
 
-/* Draw one dot: lit = bright core + darker bevel so the grid stays visible. */
+/* Draw one dot: lit = bright core, unlit = dim ghost, with a 1px gap so the
+ * matrix reads as individual pixels/dots rather than a solid panel. */
 static void dm_dot(HDC dc, int x, int y, int scale, int gap,
                    int lit, COLORREF on, COLORREF off, COLORREF grid)
 {
-    int sz = scale + gap;
-    (void)grid;                                        /* grid overlay removed */
+    int sz = scale;
+    (void)gap; (void)grid;
+    if (sz < 1) sz = 1;
     if (lit) {
-        fill(dc, x, y, sz, sz, on);                    /* solid lit dot */
+        fill(dc, x, y, sz, sz, on);
     } else {
-        fill(dc, x, y, sz, sz, off);                   /* solid unlit dot */
+        fill(dc, x, y, sz, sz, off);
     }
 }
 
@@ -1588,21 +1590,23 @@ static void Draw7SegDigit(HDC dc, int x, int y, int w, int h, int digit,
              (m & 0x40) ? litColor : unlitColor);              /* G middle */
 }
 
-/* One 5x7 dot-matrix digit inside (x,y,w,h): a grid of small Rectangle dots,
- * unlit pixels in the dim ghost colour. */
+/* One 5x7 dot-matrix digit inside (x,y,w,h): a grid of small Rectangle dots
+ * with visible gaps so the number reads as individual pixels. */
 static void DrawDotMatrixDigit(HDC dc, int x, int y, int w, int h, int digit,
                                COLORREF litColor, COLORREF unlitColor)
 {
     const char *g = (digit >= 0 && digit <= 9)
                   ? dm_glyph((WCHAR)(L'0' + digit)) : 0;
     int cw = w / 5, ch = h / 7;
-    int r, c;
+    int dotW, dotH, r, c;
     if (cw < 2) cw = 2;
     if (ch < 2) ch = 2;
+    dotW = cw - 1; if (dotW < 1) dotW = 1;
+    dotH = ch - 1; if (dotH < 1) dotH = 1;
     for (r = 0; r < 7; r++) {
         for (c = 0; c < 5; c++) {
             int on = (g && g[r * DOT_W + c] == '#');
-            fill(dc, x + c * cw + 1, y + r * ch + 1, cw - 1, ch - 1,
+            fill(dc, x + c * cw, y + r * ch, dotW, dotH,
                  on ? litColor : unlitColor);
         }
     }
@@ -1914,23 +1918,15 @@ static void draw_screen(HDC dc, int W, int H)
     /* ---------- TOYOTA VERSO DOT-MATRIX MFD (320x240) ---------- */
     if (toyota_theme()) {
         fill(dc, 0, 0, W, H, RGB(4,2,1));
-        /* warm amber-brown LCD panel with a subtle dot-grid texture */
-        {
-            int px0 = 8, py0 = 8, px1 = W - 8, py1 = H - 34;
-            int gx, gy;
-            fill(dc, px0, py0, px1 - px0, py1 - py0, RGB(48,16,2));
-            for (gy = py0 + 2; gy < py1 - 2; gy += 3)
-                for (gx = px0 + 2; gx < px1 - 2; gx += 3)
-                    SetPixel(dc, gx, gy, RGB(58,20,4));
-        }
         /* outer LCD frame */
         {
             HPEN pen = CreatePen(PS_SOLID, 2, RGB(255,95,0));
+            HBRUSH br = CreateSolidBrush(RGB(52,12,2));
             HPEN op = (HPEN)SelectObject(dc, pen);
-            HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+            HBRUSH ob = (HBRUSH)SelectObject(dc, br);
             RoundRect(dc, 6, 6, W - 6, H - 34, 8, 8);
             SelectObject(dc, op); SelectObject(dc, ob);
-            DeleteObject(pen);
+            DeleteObject(pen); DeleteObject(br);
         }
         /* vertical split at x = W*80/100 */
         {
@@ -1973,76 +1969,126 @@ static void draw_screen(HDC dc, int W, int H)
                 text_at(dc, rx - text_w(dc, L"ALT", g_fTop), 10 + (H*5/100) + 2, L"ALT", RGB(255,115,0), g_fTop);
             }
         }
-        /* Middle tier: large 5x7 dot-matrix speed digits */
+        /* Middle tier: speed digits (dot-matrix) */
         {
             int y1 = H * 22 / 100;
             int y2 = H * 62 / 100;
+            WCHAR nb[16];
             const WCHAR *unit = g_imperial ? T(S_MPH) : T(S_KMH);
-            int valid = gpsOk;
-            int val = gpsOk ? speed_disp() : 0;
-            int n = valid ? num_digits(val) : 2;
-            int dw = 54, dh = 80, dg = 13;
-            int total = n * dw + (n - 1) * dg;
-            int cx = (12 + (W * 80 / 100 - 4)) / 2;
-            int x0 = cx - total / 2;
-            int y0 = y1 + (y2 - y1 - dh) / 2;
-            if (x0 < 12) x0 = 12;
-            if (y0 < y1 + 2) y0 = y1 + 2;
-            DrawDotMatrixNumber(dc, x0, y0, dw, dh, val, valid,
-                                RGB(255,185,35), RGB(74,30,6));
+            if (gpsOk) wsprintfW(nb, L"%d", speed_disp());
+            else wcscpy(nb, L"--");
+            /* grid */
+            {
+                int gx, gy;
+                for (gy = y1 + 4; gy <= y2 - 4; gy += 3)
+                    for (gx = 12; gx <= W * 80 / 100 - 8; gx += 3)
+                        SetPixel(dc, gx, gy, RGB(52,12,2));
+            }
+            {
+                int sc = 10, gp = 2;
+                int tw, cx = (12 + (W * 80 / 100 - 4)) / 2;
+                int th = dm_h(sc, gp);
+                int y0 = y1 + ((y2 - y1) - th) / 2;
+                while (sc > 4 && th > (y2 - y1 - 10)) { sc--; th = dm_h(sc, gp); y0 = y1 + ((y2 - y1) - th) / 2; }
+                tw = dm_w(nb, sc, gp);
+                dm_text(dc, cx - tw / 2, y0, nb, sc, gp, 1,
+                        RGB(255,175,25), RGB(78,20,4), RGB(52,12,2));
+            }
             {
                 int uw = text_w(dc, unit, g_fUnit);
                 int rx = W * 80 / 100 - 4;
                 text_at(dc, rx - uw, y2 - (H*8/100) - 2, unit, RGB(255,125,0), g_fUnit);
             }
         }
-        /* Bottom tier: ODO and MAX in dot-matrix font */
+        /* Bottom tier: ODO and MAX (dot-matrix numbers) */
         {
             int y2 = H * 62 / 100;
             int ow, of;
-            WCHAR obuf[32], mb[32];
             odo_disp(&ow, &of);
-            wsprintfW(obuf, L"%d.%d", ow, of);
+            WCHAR obuf[32], onum[24], mb[32], mnum[24];
+            wsprintfW(onum, L"%d.%d", ow, of);
+            wsprintfW(obuf, L"ODO %d.%d", ow, of);
             text_at(dc, 12, y2 + 4, L"ODO", RGB(255,115,0), g_fTop);
-            dm_text(dc, 12, y2 + 20, obuf, 2, 1, 1,
-                    RGB(255,185,35), RGB(74,30,6), RGB(255,115,0));
+            dm_text(dc, 12, y2 + 18, onum, 3, 1, 1,
+                    RGB(255,175,25), RGB(78,20,4), RGB(52,12,2));
+            wsprintfW(mnum, L"MAX %d", speed_max_disp());
             wsprintfW(mb, L"MAX %d", speed_max_disp());
-            dm_text(dc, W * 80 / 100 - 4 - dm_w(mb, 2, 1), y2 + 20, mb, 2, 1, 1,
-                    RGB(255,185,35), RGB(74,30,6), RGB(255,115,0));
-        }
-        /* Right section: vertical stack of 8 segmented blocks (1/1 top, red R) */
-        {
-            int rx = W * 80 / 100 + 6;
-            int rw = W - rx - 8;
-            int i;
-            int batt = (g_batt_pct >= 0) ? g_batt_pct : 50;
-            int active = batt * 8 / 100;
-            int bh = 15, y = 26;
-            if (active < 0) active = 0; if (active > 8) active = 8;
-            text_at(dc, rx, 10, L"1/1", RGB(255,175,25), g_fTop);
-            for (i = 0; i < 8; i++) {
-                COLORREF c = (i < active) ? RGB(255,185,35) : RGB(78,20,4);
-                fill(dc, rx, y, rw - 6, bh, c);
-                {
-                    HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,115,0));
-                    HPEN op = (HPEN)SelectObject(dc, pen);
-                    HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
-                    Rectangle(dc, rx, y, rx + (rw - 6), y + bh);
-                    SelectObject(dc, op); SelectObject(dc, ob);
-                    DeleteObject(pen);
-                }
-                y += bh + 3;
-            }
-            /* glowing red reverse indicator at the bottom of the stack */
             {
-                HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,40,30));
-                HBRUSH br = CreateSolidBrush(RGB(60,6,4));
-                HPEN op = (HPEN)SelectObject(dc, pen);
-                HBRUSH ob = (HBRUSH)SelectObject(dc, br);
-                Rectangle(dc, rx, 176, rx + (rw - 6), 200);
-                SelectObject(dc, op); SelectObject(dc, ob);
-                DeleteObject(pen); DeleteObject(br);
-                text_center(dc, rx + (rw - 6) / 2, 180, L"R", RGB(255,60,45), g_fLabel);
+                int mw = dm_w(mnum, 3, 1);
+                int rx = W * 80 / 100 - 4;
+                dm_text(dc, rx - mw, y2 + 18, mnum, 3, 1, 1,
+                        RGB(255,175,25), RGB(78,20,4), RGB(52,12,2));
+            }
+        }
+        /* Right section: hour, battery, GPS signal */
+        {
+            int rx = W * 80 / 100 + 4;
+            int rw = W - rx - 6;
+            int y = 10;
+            /* hour */
+            {
+                SYSTEMTIME st;
+                WCHAR tb[16];
+                GetLocalTime(&st);
+                if (g_clock_24h) wsprintfW(tb, L"%02d:%02d", st.wHour, st.wMinute);
+                else {
+                    int h12 = st.wHour % 12;
+                    if (h12 == 0) h12 = 12;
+                    wsprintfW(tb, L"%d:%02d", h12, st.wMinute);
+                }
+                text_at(dc, rx, y, tb, RGB(255,125,0), g_fLabel);
+                y += (H*8/100) + 4;
+            }
+            /* battery */
+            {
+                int batt = (g_batt_pct >= 0) ? g_batt_pct : 50;
+                int active = batt * 8 / 100; if (active < 0) active = 0; if (active > 8) active = 8;
+                int i;
+                text_at(dc, rx, y, L"BAT", RGB(255,115,0), g_fTop);
+                y += (H*5/100) + 2;
+                for (i = 0; i < 8; i++) {
+                    COLORREF c = (i < active) ? RGB(255,175,25) : RGB(78,20,4);
+                    fill(dc, rx, y, rw - 8, 4, c);
+                    {
+                        HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,115,0));
+                        HPEN op = (HPEN)SelectObject(dc, pen);
+                        HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+                        Rectangle(dc, rx, y, rx + (rw - 8), y + 4);
+                        SelectObject(dc, op); SelectObject(dc, ob);
+                        DeleteObject(pen);
+                    }
+                    y += 4 + 2;
+                }
+                y += 4;
+            }
+            /* GPS signal */
+            {
+                int bars = 0;
+                if (gpsOk && g_hdop10 != 9999 && g_hdop10 < 200) {
+                    if (g_hdop10 <= 10) bars = 8;
+                    else if (g_hdop10 <= 20) bars = 6;
+                    else if (g_hdop10 <= 40) bars = 4;
+                    else if (g_hdop10 <= 80) bars = 2;
+                } else if (g_sats_view > 0) {
+                    bars = (g_sats_view >= 8) ? 6 : (g_sats_view >= 4 ? 4 : 2);
+                }
+                if (bars > 8) bars = 8;
+                int i;
+                text_at(dc, rx, y, L"GPS", RGB(255,115,0), g_fTop);
+                y += (H*5/100) + 2;
+                for (i = 0; i < 8; i++) {
+                    COLORREF c = (i < bars) ? RGB(255,175,25) : RGB(78,20,4);
+                    fill(dc, rx, y, rw - 8, 4, c);
+                    {
+                        HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,115,0));
+                        HPEN op = (HPEN)SelectObject(dc, pen);
+                        HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+                        Rectangle(dc, rx, y, rx + (rw - 8), y + 4);
+                        SelectObject(dc, op); SelectObject(dc, ob);
+                        DeleteObject(pen);
+                    }
+                    y += 4 + 2;
+                }
             }
         }
 
