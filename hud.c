@@ -2209,18 +2209,40 @@ static void draw_screen(HDC dc, int W, int H)
             SelectObject(dc, op);
             DeleteObject(pen);
         }
-        /* XT coupe silhouette (wireframe) */
+        /* Subaru XT coupe rear-view wireframe */
         {
             HPEN pen = CreatePen(PS_SOLID, 2, RGB(255,200,40));
             HPEN op = (HPEN)SelectObject(dc, pen);
             HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
-            /* simple coupe outline */
-            MoveToEx(dc, 134, 154, NULL);
-            LineTo(dc, 140, 118);
-            LineTo(dc, 160, 118);
-            LineTo(dc, 180, 134);
-            LineTo(dc, 186, 154);
-            LineTo(dc, 134, 154);
+            /* body outline */
+            MoveToEx(dc, 122, 178, NULL);
+            LineTo(dc, 126, 152);
+            LineTo(dc, 134, 138);
+            LineTo(dc, 142, 126);
+            LineTo(dc, 154, 120);
+            LineTo(dc, 166, 120);
+            LineTo(dc, 178, 126);
+            LineTo(dc, 186, 138);
+            LineTo(dc, 194, 152);
+            LineTo(dc, 198, 178);
+            LineTo(dc, 122, 178);
+            /* rear window / cabin */
+            MoveToEx(dc, 138, 138, NULL);
+            LineTo(dc, 146, 128);
+            LineTo(dc, 174, 128);
+            LineTo(dc, 182, 138);
+            LineTo(dc, 138, 138);
+            /* trunk and bumper lines */
+            MoveToEx(dc, 126, 152, NULL);
+            LineTo(dc, 194, 152);
+            MoveToEx(dc, 124, 166, NULL);
+            LineTo(dc, 196, 166);
+            /* tail lights */
+            Rectangle(dc, 128, 154, 140, 162);
+            Rectangle(dc, 180, 154, 192, 162);
+            /* wheels */
+            Rectangle(dc, 124, 178, 138, 190);
+            Rectangle(dc, 182, 178, 196, 190);
             SelectObject(dc, op);
             SelectObject(dc, ob);
             DeleteObject(pen);
@@ -2415,28 +2437,48 @@ static void draw_screen(HDC dc, int W, int H)
                 text_at(dc, W - 14 - text_w(dc, sb, g_fTop), 14, sb, RGB(45,225,235), g_fTop);
             }
         }
-        /* speed arch 24 segments */
+        /* speed arch - continuous curved line */
         {
             int spd = gpsOk ? g_speed_kmh : 0;
             double maxv = g_imperial ? 120.0 : 180.0;
             int filled = (int)((double)spd / maxv * 24.0 + 0.5);
-            int i;
-            if (filled < 0) filled = 0; if (filled > 24) filled = 24;
-            for (i = 0; i < 24; i++) {
-                double t = (double)i / 23.0;
-                int x = 16 + (int)(t * (W - 32 - 8));
-                int ay = (int)(86 - 56.0 * my_sin(t * PI_D));
-                COLORREF c = RGB(10,50,55);
-                if (i < filled) c = RGB(45,225,235);
-                if (i >= 20 && i < filled) c = RGB(255,175,30);
-                fill(dc, x, ay, 8, 6, c);
+            int segs = 24, i;
+            POINT pts[25];
+            if (filled < 0) filled = 0; if (filled > segs) filled = segs;
+            for (i = 0; i <= segs; i++) {
+                double t = (double)i / (double)segs;
+                pts[i].x = 16 + (int)(t * (W - 32 - 8));
+                pts[i].y = (int)(86 - 56.0 * my_sin(t * PI_D));
+            }
+            /* dim base arc */
+            {
+                HPEN pen = CreatePen(PS_SOLID, 2, RGB(10,50,55));
+                HPEN op = (HPEN)SelectObject(dc, pen);
+                Polyline(dc, pts, segs + 1);
+                SelectObject(dc, op); DeleteObject(pen);
+            }
+            /* lit arc with glow */
+            if (filled > 0) {
+                int n1 = filled; if (n1 > 20) n1 = 20;
+                /* glow */
                 {
-                    HPEN pen = CreatePen(PS_SOLID, 1, RGB(45,225,235));
+                    HPEN pen = CreatePen(PS_SOLID, 4, RGB(16,80,86));
                     HPEN op = (HPEN)SelectObject(dc, pen);
-                    HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
-                    Rectangle(dc, x, ay, x + 8, ay + 6);
-                    SelectObject(dc, op); SelectObject(dc, ob);
-                    DeleteObject(pen);
+                    Polyline(dc, pts, n1 + 1);
+                    if (filled > 20) Polyline(dc, pts + 20, filled - 20 + 1);
+                    SelectObject(dc, op); DeleteObject(pen);
+                }
+                {
+                    HPEN pen = CreatePen(PS_SOLID, 2, RGB(45,225,235));
+                    HPEN op = (HPEN)SelectObject(dc, pen);
+                    Polyline(dc, pts, n1 + 1);
+                    SelectObject(dc, op); DeleteObject(pen);
+                }
+                if (filled > 20) {
+                    HPEN pen = CreatePen(PS_SOLID, 2, RGB(255,175,30));
+                    HPEN op = (HPEN)SelectObject(dc, pen);
+                    Polyline(dc, pts + 20, filled - 20 + 1);
+                    SelectObject(dc, op); DeleteObject(pen);
                 }
             }
             /* scale markers */
