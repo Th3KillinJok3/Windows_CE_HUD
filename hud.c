@@ -1579,7 +1579,6 @@ static void seg_draw(HDC dc, int x1, int y1, int x2, int y2, int t,
     DeleteObject(pen);
 }
 
-}
 static void seg_draw_lit(HDC dc, int x1, int y1, int x2, int y2, int t,
                          COLORREF lit, COLORREF glow)
 {
