@@ -1368,7 +1368,16 @@ static void fill(HDC dc, int x, int y, int w, int h, COLORREF c)
 static void text_at(HDC dc, int x, int y, const WCHAR *s, COLORREF c, HFONT f)
 {
     RECT r; HFONT old = (HFONT)SelectObject(dc,f);
-    SetBkMode(dc, TRANSPARENT); SetTextColor(dc,c);
+    COLORREF gc = glow_mix(c, 2, 5);
+    int ox[4] = { -1, 1, 0, 0 }, oy[4] = { 0, 0, -1, 1 }, i;
+    SetBkMode(dc, TRANSPARENT);
+    /* soft glow halo behind the text */
+    for (i = 0; i < 4; i++) {
+        SetTextColor(dc, gc);
+        r.left=x+ox[i]; r.top=y+oy[i]; r.right=x+ox[i]+300; r.bottom=y+oy[i]+200;
+        DrawTextW(dc,s,-1,&r,DT_LEFT|DT_TOP|DT_SINGLELINE|DT_NOCLIP);
+    }
+    SetTextColor(dc,c);
     r.left=x; r.top=y; r.right=x+300; r.bottom=y+200;
     DrawTextW(dc,s,-1,&r,DT_LEFT|DT_TOP|DT_SINGLELINE|DT_NOCLIP);
     SelectObject(dc,old);
@@ -1470,8 +1479,7 @@ static int dm_h(int scale, int gap)
     return DOT_H * (scale + gap) - gap;
 }
 
-/* Draw one dot: lit = bright core, unlit = dim ghost, with a 1px gap so the
- * matrix reads as individual pixels/dots rather than a solid panel. */
+/* Draw one dot: lit = bright core with a soft glow halo, unlit = dim ghost. */
 static void dm_dot(HDC dc, int x, int y, int scale, int gap,
                    int lit, COLORREF on, COLORREF off, COLORREF grid)
 {
@@ -1479,6 +1487,8 @@ static void dm_dot(HDC dc, int x, int y, int scale, int gap,
     (void)gap; (void)grid;
     if (sz < 1) sz = 1;
     if (lit) {
+        COLORREF glow = glow_mix(on, 2, 5);
+        fill(dc, x - 1, y - 1, sz + 2, sz + 2, glow);
         fill(dc, x, y, sz, sz, on);
     } else {
         fill(dc, x, y, sz, sz, off);
@@ -1523,13 +1533,15 @@ static void dm_center(HDC dc, int cxmid, int y, const WCHAR *s,
  * tube instead of a plain computer font. Pure GDI (Polygon / Rectangle). */
 
 /* One angled hexagonal segment. Horizontal when y1 == y2, vertical when
- * x1 == x2. Draws a 6-point hexagon (pointed ends) in colour c. */
-static void seg_draw(HDC dc, int x1, int y1, int x2, int y2, int t, COLORREF c)
+ * x1 == x2. ox,oy offset the whole shape (used for glow halos). */
+static void seg_draw(HDC dc, int x1, int y1, int x2, int y2, int t,
+                     COLORREF c, int ox, int oy)
 {
     POINT p[6];
     HBRUSH br, ob;
     HPEN pen, op;
     if (t < 2) t = 2;
+    x1 += ox; y1 += oy; x2 += ox; y2 += oy;
     if (y1 == y2) {                          /* horizontal segment */
         p[0].x = x1;       p[0].y = y1 + t/2;
         p[1].x = x1 + t/2; p[1].y = y1;
@@ -1556,6 +1568,26 @@ static void seg_draw(HDC dc, int x1, int y1, int x2, int y2, int t, COLORREF c)
     DeleteObject(pen);
 }
 
+static COLORREF glow_mix(COLORREF c, int num, int den)
+{
+    int r = GetRValue(c) * num / den;
+    int g = GetGValue(c) * num / den;
+    int b = GetBValue(c) * num / den;
+    if (r > 255) r = 255; if (g > 255) g = 255; if (b > 255) b = 255;
+    return RGB(r, g, b);
+}
+
+/* Draw one segment: if lit, paint a soft halo behind it then the lit segment. */
+static void seg_draw_lit(HDC dc, int x1, int y1, int x2, int y2, int t,
+                         COLORREF lit, COLORREF glow)
+{
+    seg_draw(dc, x1, y1, x2, y2, t, glow, -1, 0);
+    seg_draw(dc, x1, y1, x2, y2, t, glow,  1, 0);
+    seg_draw(dc, x1, y1, x2, y2, t, glow,  0,-1);
+    seg_draw(dc, x1, y1, x2, y2, t, glow,  0, 1);
+    seg_draw(dc, x1, y1, x2, y2, t, lit,  0, 0);
+}
+
 /* Segment masks: bit0=A(top) 1=B(top-right) 2=C(bottom-right) 3=D(bottom)
  * 4=E(bottom-left) 5=F(top-left) 6=G(middle). */
 static const unsigned char SEG7_MASK[10] = {
@@ -1563,35 +1595,36 @@ static const unsigned char SEG7_MASK[10] = {
 };
 
 /* One 7-segment digit inside (x,y,w,h). digit 0..9, 10 = '-', else blank.
- * Both the lit and the unlit (ghost) segments are drawn. */
+ * Lit segments get a soft halo behind them; unlit ghost segments are always drawn. */
 static void Draw7SegDigit(HDC dc, int x, int y, int w, int h, int digit,
                           COLORREF litColor, COLORREF unlitColor)
 {
     int t = w / 5;
     int mid = y + h / 2;
     unsigned char m;
+    COLORREF glow = glow_mix(litColor, 2, 5);
     if (t < 2) t = 2;
     if (digit >= 0 && digit <= 9) m = SEG7_MASK[digit];
     else if (digit == 10)         m = 0x40;   /* '-' lights the middle bar */
     else                          m = 0x00;   /* blank: only ghost segments */
-    seg_draw(dc, x + t, y, x + w - t, y, t,
-             (m & 0x01) ? litColor : unlitColor);              /* A top */
-    seg_draw(dc, x + w - t, y + t, x + w - t, mid, t,
-             (m & 0x02) ? litColor : unlitColor);              /* B top-right */
-    seg_draw(dc, x + w - t, mid, x + w - t, y + h - t, t,
-             (m & 0x04) ? litColor : unlitColor);              /* C bottom-right */
-    seg_draw(dc, x + t, y + h - t, x + w - t, y + h - t, t,
-             (m & 0x08) ? litColor : unlitColor);              /* D bottom */
-    seg_draw(dc, x, mid, x, y + h - t, t,
-             (m & 0x10) ? litColor : unlitColor);              /* E bottom-left */
-    seg_draw(dc, x, y + t, x, mid, t,
-             (m & 0x20) ? litColor : unlitColor);              /* F top-left */
-    seg_draw(dc, x + t, mid - t/2, x + w - t, mid - t/2, t,
-             (m & 0x40) ? litColor : unlitColor);              /* G middle */
+    if (m & 0x01) seg_draw_lit(dc, x + t, y, x + w - t, y, t, litColor, glow);
+    else          seg_draw(dc, x + t, y, x + w - t, y, t, unlitColor, 0, 0);
+    if (m & 0x02) seg_draw_lit(dc, x + w - t, y + t, x + w - t, mid, t, litColor, glow);
+    else          seg_draw(dc, x + w - t, y + t, x + w - t, mid, t, unlitColor, 0, 0);
+    if (m & 0x04) seg_draw_lit(dc, x + w - t, mid, x + w - t, y + h - t, t, litColor, glow);
+    else          seg_draw(dc, x + w - t, mid, x + w - t, y + h - t, t, unlitColor, 0, 0);
+    if (m & 0x08) seg_draw_lit(dc, x + t, y + h - t, x + w - t, y + h - t, t, litColor, glow);
+    else          seg_draw(dc, x + t, y + h - t, x + w - t, y + h - t, t, unlitColor, 0, 0);
+    if (m & 0x10) seg_draw_lit(dc, x, mid, x, y + h - t, t, litColor, glow);
+    else          seg_draw(dc, x, mid, x, y + h - t, t, unlitColor, 0, 0);
+    if (m & 0x20) seg_draw_lit(dc, x, y + t, x, mid, t, litColor, glow);
+    else          seg_draw(dc, x, y + t, x, mid, t, unlitColor, 0, 0);
+    if (m & 0x40) seg_draw_lit(dc, x + t, mid - t/2, x + w - t, mid - t/2, t, litColor, glow);
+    else          seg_draw(dc, x + t, mid - t/2, x + w - t, mid - t/2, t, unlitColor, 0, 0);
 }
 
 /* One 5x7 dot-matrix digit inside (x,y,w,h): a grid of small Rectangle dots
- * with visible gaps so the number reads as individual pixels. */
+ * with visible gaps. Lit dots get a soft glow halo behind them. */
 static void DrawDotMatrixDigit(HDC dc, int x, int y, int w, int h, int digit,
                                COLORREF litColor, COLORREF unlitColor)
 {
@@ -1599,6 +1632,7 @@ static void DrawDotMatrixDigit(HDC dc, int x, int y, int w, int h, int digit,
                   ? dm_glyph((WCHAR)(L'0' + digit)) : 0;
     int cw = w / 5, ch = h / 7;
     int dotW, dotH, r, c;
+    COLORREF glow = glow_mix(litColor, 2, 5);
     if (cw < 2) cw = 2;
     if (ch < 2) ch = 2;
     dotW = cw - 1; if (dotW < 1) dotW = 1;
@@ -1606,8 +1640,12 @@ static void DrawDotMatrixDigit(HDC dc, int x, int y, int w, int h, int digit,
     for (r = 0; r < 7; r++) {
         for (c = 0; c < 5; c++) {
             int on = (g && g[r * DOT_W + c] == '#');
-            fill(dc, x + c * cw, y + r * ch, dotW, dotH,
-                 on ? litColor : unlitColor);
+            if (on) {
+                fill(dc, x + c * cw - 1, y + r * ch - 1, dotW + 2, dotH + 2, glow);
+                fill(dc, x + c * cw, y + r * ch, dotW, dotH, litColor);
+            } else {
+                fill(dc, x + c * cw, y + r * ch, dotW, dotH, unlitColor);
+            }
         }
     }
 }
