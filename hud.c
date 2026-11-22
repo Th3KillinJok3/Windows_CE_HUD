@@ -2389,6 +2389,13 @@ static void draw_screen(HDC dc, int W, int H)
             SelectObject(dc, op); SelectObject(dc, ob);
             DeleteObject(pen); DeleteObject(br);
         }
+        /* subtle VFD mesh texture */
+        {
+            int y;
+            for (y = 8; y < H - 36; y += 2) {
+                fill(dc, 8, y, W - 16, 1, RGB(3,8,10));
+            }
+        }
         /* top bars */
         {
             int i, active, bars;
@@ -2818,10 +2825,22 @@ static void draw_screen(HDC dc, int W, int H)
             }
         }
     }
+    /* subtle scanlines for retro VFD/CRT feel */
+    {
+        int y;
+        for (y = 0; y < H; y += 3) {
+            fill(dc, 0, y, W, 1, RGB(0,0,0));
+        }
+    }
 }
 
 /* ============ OKNO ============ */
 static HWND g_hwnd;
+static HDC g_ghostDC = NULL;
+static HBITMAP g_ghostBmp = NULL;
+static HBITMAP g_ghostOld = NULL;
+static HBRUSH g_fadeBrush = NULL;
+static int g_ghostW = 0, g_ghostH = 0;
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
@@ -2864,9 +2883,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         PAINTSTRUCT ps; HDC dc; RECT r;
         dc = BeginPaint(hwnd,&ps);
         GetClientRect(hwnd,&r);
-        /* Double buffering: draw the WHOLE screen into memory, then blit
-         * it in one BitBlt. Without this every FillRect/DrawText went to
-         * the screen separately and the result flickered. */
+        /* Double buffering + phosphor ghosting (retro persistence). */
         {
             HDC mem = CreateCompatibleDC(dc);
             if (mem) {
@@ -2874,6 +2891,45 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 if (bmp) {
                     HGDIOBJ old = SelectObject(mem, bmp);
                     draw_screen(mem, r.right, r.bottom);
+                    /* ghost trail: OR previous bright frame, then fade+store */
+                    if (r.right > 0 && r.bottom > 0) {
+                        if (!g_ghostDC || g_ghostW != r.right || g_ghostH != r.bottom) {
+                            if (g_ghostDC) {
+                                SelectObject(g_ghostDC, g_ghostOld);
+                                DeleteObject(g_ghostBmp);
+                                DeleteDC(g_ghostDC);
+                                g_ghostDC = NULL; g_ghostBmp = NULL; g_ghostOld = NULL;
+                            }
+                            g_ghostDC = CreateCompatibleDC(dc);
+                            if (g_ghostDC) {
+                                g_ghostBmp = CreateCompatibleBitmap(dc, r.right, r.bottom);
+                                if (g_ghostBmp) {
+                                    g_ghostOld = (HBITMAP)SelectObject(g_ghostDC, g_ghostBmp);
+                                    PatBlt(g_ghostDC, 0, 0, r.right, r.bottom, BLACKNESS);
+                                    g_ghostW = r.right; g_ghostH = r.bottom;
+                                } else {
+                                    DeleteDC(g_ghostDC); g_ghostDC = NULL;
+                                }
+                            }
+                        }
+                        if (!g_fadeBrush) {
+                            /* 8x8 dither pattern: ~25% black pixels to fade ghost */
+                            static const WORD pat[8] = { 0xFF,0xFF,0xFB,0xFF,0xFF,0xFF,0xBF,0xFF };
+                            HBITMAP pb = CreateBitmap(8, 8, 1, 1, pat);
+                            if (pb) { g_fadeBrush = CreatePatternBrush(pb); DeleteObject(pb); }
+                        }
+                        if (g_ghostDC) {
+                            /* overlay old ghost for persistence */
+                            BitBlt(mem, 0, 0, r.right, r.bottom, g_ghostDC, 0, 0, SRCPAINT);
+                            /* fade ghost and store current frame */
+                            BitBlt(g_ghostDC, 0, 0, r.right, r.bottom, mem, 0, 0, SRCCOPY);
+                            if (g_fadeBrush) {
+                                HBRUSH ob = (HBRUSH)SelectObject(g_ghostDC, g_fadeBrush);
+                                PatBlt(g_ghostDC, 0, 0, r.right, r.bottom, 0x00A000C9); /* DPx */
+                                SelectObject(g_ghostDC, ob);
+                            }
+                        }
+                    }
                     BitBlt(dc, 0, 0, r.right, r.bottom, mem, 0, 0, SRCCOPY);
                     SelectObject(mem, old);
                     DeleteObject(bmp);
@@ -3039,6 +3095,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         DestroyWindow(hwnd);
         return 0;
     case WM_DESTROY:
+        if (g_ghostDC) {
+            SelectObject(g_ghostDC, g_ghostOld);
+            if (g_ghostBmp) DeleteObject(g_ghostBmp);
+            DeleteDC(g_ghostDC);
+            g_ghostDC = NULL; g_ghostBmp = NULL; g_ghostOld = NULL;
+        }
+        if (g_fadeBrush) { DeleteObject(g_fadeBrush); g_fadeBrush = NULL; }
         PostQuitMessage(0);
         return 0;
     }
