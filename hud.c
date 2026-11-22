@@ -2925,7 +2925,9 @@ static HDC g_ghostDC = NULL;
 static HBITMAP g_ghostBmp = NULL;
 static HBITMAP g_ghostOld = NULL;
 static HBRUSH g_fadeBrush = NULL;
+static HBRUSH g_fadeBrush2 = NULL;
 static int g_ghostW = 0, g_ghostH = 0;
+static int g_ghostPhase = 0;
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
@@ -2999,23 +3001,30 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                             }
                         }
                         if (!g_fadeBrush) {
-                            /* 50% checker dither - multiple passes give fast fade */
-                            static const WORD pat[8] = { 0x55,0xAA,0x55,0xAA,0x55,0xAA,0x55,0xAA };
-                            HBITMAP pb = CreateBitmap(8, 8, 1, 1, pat);
+                            static const WORD patA[8] = { 0x55,0xAA,0x55,0xAA,0x55,0xAA,0x55,0xAA };
+                            static const WORD patB[8] = { 0xAA,0x55,0xAA,0x55,0xAA,0x55,0xAA,0x55 };
+                            HBITMAP pb = CreateBitmap(8, 8, 1, 1, patA);
                             if (pb) { g_fadeBrush = CreatePatternBrush(pb); DeleteObject(pb); }
+                            pb = CreateBitmap(8, 8, 1, 1, patB);
+                            if (pb) { g_fadeBrush2 = CreatePatternBrush(pb); DeleteObject(pb); }
                         }
                         if (g_ghostDC) {
-                            /* overlay old ghost for persistence */
+                            /* overlay faint previous ghost (phosphor persistence) */
                             BitBlt(mem, 0, 0, r.right, r.bottom, g_ghostDC, 0, 0, SRCPAINT);
-                            /* store only current frame, heavily dimmed (no accumulation) */
+                            /* store current frame only, then fade smoothly to zero (~0.2s) */
                             BitBlt(g_ghostDC, 0, 0, r.right, r.bottom, mem, 0, 0, SRCCOPY);
-                            if (g_fadeBrush) {
-                                HBRUSH ob = (HBRUSH)SelectObject(g_ghostDC, g_fadeBrush);
-                                PatBlt(g_ghostDC, 0, 0, r.right, r.bottom, 0x00A000C9); /* DPa */
-                                PatBlt(g_ghostDC, 0, 0, r.right, r.bottom, 0x00A000C9); /* DPa */
-                                PatBlt(g_ghostDC, 0, 0, r.right, r.bottom, 0x00A000C9); /* DPa */
-                                PatBlt(g_ghostDC, 0, 0, r.right, r.bottom, 0x00A000C9); /* DPa */
-                                SelectObject(g_ghostDC, ob);
+                            {
+                                HBRUSH fb = (g_ghostPhase & 1) ? g_fadeBrush2 : g_fadeBrush;
+                                if (fb) {
+                                    HBRUSH ob = (HBRUSH)SelectObject(g_ghostDC, fb);
+                                    PatBlt(g_ghostDC, 0, 0, r.right, r.bottom, 0x00A000C9); /* DPa */
+                                    SelectObject(g_ghostDC, ob);
+                                }
+                                g_ghostPhase++;
+                                /* guarantee full fade to zero (~0.2s at 60ms timer) */
+                                if ((g_ghostPhase % 4) == 0) {
+                                    PatBlt(g_ghostDC, 0, 0, r.right, r.bottom, BLACKNESS);
+                                }
                             }
                         }
                     }
@@ -3054,14 +3063,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (!g_menu_open && x >= W - 116 && x < W - 58 && y >= H - BOT_H) {
             g_theme = (g_theme + 1) % THEME_COUNT;
             theme_save();
-            if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
+            if (g_ghostDC) { PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS); g_ghostPhase = 0; }
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
         /* MENU button - bottom right */
         if (!g_menu_open && x >= W - 58 && y >= H - BOT_H) {
             g_menu_open = 1;
-            if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
+            if (g_ghostDC) { PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS); g_ghostPhase = 0; }
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
@@ -3075,7 +3084,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             /* click outside panel closes menu */
             if (x < mx || x > mx + mw || y < my || y > my + 10 * 34 + 8) {
                 g_menu_open = 0;
-                if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
+                if (g_ghostDC) { PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS); g_ghostPhase = 0; }
                 InvalidateRect(hwnd, NULL, FALSE);
                 return 0;
             }
@@ -3086,36 +3095,36 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                     if (i == 0) { /* Theme */
                         g_theme = (g_theme + 1) % THEME_COUNT;
                         theme_save();
-                        if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
+                        if (g_ghostDC) { PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS); g_ghostPhase = 0; }
                     } else if (i == 1) { /* Font */
                         g_font_pick = (g_font_pick + 1) % FONT_COUNT;
                         font_save();
                         make_fonts();
-                        if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
+                        if (g_ghostDC) { PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS); g_ghostPhase = 0; }
                     } else if (i == 2) { /* Units */
                         g_imperial = !g_imperial;
-                        if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
+                        if (g_ghostDC) { PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS); g_ghostPhase = 0; }
                     } else if (i == 3) { /* Language */
                         g_lang = (g_lang + 1) % LANG_COUNT;
-                        if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
+                        if (g_ghostDC) { PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS); g_ghostPhase = 0; }
                     } else if (i == 4) { /* Clock 24h */
                         g_clock_24h = !g_clock_24h;
-                        if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
+                        if (g_ghostDC) { PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS); g_ghostPhase = 0; }
                     } else if (i == 5) { /* Scanlines */
                         g_scanlines = !g_scanlines;
                         fx_save();
-                        if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
+                        if (g_ghostDC) { PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS); g_ghostPhase = 0; }
                     } else if (i == 6) { /* Glitch */
                         g_glitch = !g_glitch;
                         fx_save();
-                        if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
+                        if (g_ghostDC) { PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS); g_ghostPhase = 0; }
                     } else if (i == 7) { /* CRT Curve */
                         g_crt = !g_crt;
                         fx_save();
-                        if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
+                        if (g_ghostDC) { PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS); g_ghostPhase = 0; }
                     } else if (i == 8) { /* Close */
                         g_menu_open = 0;
-                        if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
+                        if (g_ghostDC) { PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS); g_ghostPhase = 0; }
                     } else if (i == 9) { /* Exit */
                         g_menu_open = 0;
                         g_running = 0;
@@ -3130,7 +3139,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             }
             if (!handled) {
                 g_menu_open = 0;
-                if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
+                if (g_ghostDC) { PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS); g_ghostPhase = 0; }
                 InvalidateRect(hwnd, NULL, FALSE);
             }
             return 0;
@@ -3213,6 +3222,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             g_ghostDC = NULL; g_ghostBmp = NULL; g_ghostOld = NULL;
         }
         if (g_fadeBrush) { DeleteObject(g_fadeBrush); g_fadeBrush = NULL; }
+        if (g_fadeBrush2) { DeleteObject(g_fadeBrush2); g_fadeBrush2 = NULL; }
         PostQuitMessage(0);
         return 0;
     }
@@ -3268,7 +3278,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR cmd, int show)
     }
 
     CreateThread(NULL,0,gps_thread,NULL,0,NULL);
-    SetTimer(hwnd,1,500,NULL);
+    SetTimer(hwnd,1,60,NULL);
 
     while (GetMessageW(&msg,NULL,0,0)) {
         TranslateMessage(&msg);

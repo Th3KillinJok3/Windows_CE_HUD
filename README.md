@@ -3,11 +3,24 @@
 A Windows CE 5.0 (ARM) application showing speed, odometer, altitude, compass,
 max speed, HDOP signal bars and battery level.
 
-* **Themes:** VERSO (red Toyota Verso 2017 cluster look, default), CZERWONY, AMBER, NIEBIESKI
-* **Units:** metric (km/h, km, m) or imperial (mph, mi, ft) — from `hud.ini`
+* **Themes:** DOTMATRIX, EL_GLOW, SUBARU_XT, CZERWONY
+* **Units:** metric (km/h, km, m) or imperial (mph, mi, ft)
 * **Languages:** PL, EN, DE, ES, FR, IT, RU, NL, PT, CZ — auto-detected or from `hud.ini`
 * **Fonts:** Minecraft.ttf (if present), Terminal, Fixedsys, MS Sans Serif, Tahoma, Courier New, Arial
 * **GPS:** automatic COM0–9 scan at 4800 baud, NMEA 0183, no TX (safe for the receiver)
+* **FX:** scanlines, glitch, CRT curve, and phosphor ghosting (menu-toggleable where applicable)
+
+## Screenshots
+
+> Approximate mockups generated from the theme layouts (not real WinCE device captures).
+
+| DOTMATRIX | EL_GLOW |
+|---|---|
+| ![DOTMATRIX](screenshots/theme0_dotmatrix.png) | ![EL_GLOW](screenshots/theme1_el_glow.png) |
+
+| SUBARU_XT | CZERWONY |
+|---|---|
+| ![SUBARU_XT](screenshots/theme2_subaru_xt.png) | ![CZERWONY](screenshots/theme3_czerwony.png) |
 
 ---
 
@@ -61,7 +74,7 @@ units = imperial
 ; omit the line to follow the device locale
 lang = en
 
-; 0 = VERSO (default), 1 = CZERWONY, 2 = AMBER, 3 = NIEBIESKI
+; 0 = DOTMATRIX, 1 = EL_GLOW, 2 = SUBARU_XT, 3 = CZERWONY
 theme = 0
 ```
 
@@ -92,13 +105,13 @@ the WinCE core font has no glyphs, so no text is lost.
 
 | # | Name | Look |
 |---|---|---|
-| 0 | DOTMATRIX | Toyota Verso center dot-matrix MFD |
-| 1 | EL_GLOW | Citroen BX Digit full-width VFD |
+| 0 | DOTMATRIX | Toyota Verso-style dot-matrix MFD |
+| 1 | EL_GLOW | Citroen BX-inspired cyan VFD |
 | 2 | SUBARU_XT | 1985 Subaru XT Turbo digital cluster |
 | 3 | CZERWONY | classic dark red |
 
 The **THEME** button cycles them and writes the choice to `hud_theme.txt`,
-which wins over `theme=` in `hud.ini`.
+which wins over `theme=` in `hud.ini`. FX toggles (Scanlines/Glitch/CRT Curve) are in the on-screen MENU and saved to `hud_fx.txt`.
 
 ---
 
@@ -117,6 +130,7 @@ The **FONT** button cycles the available fonts.
 | `hud_odo.txt` | odometer (km, always metric) |
 | `hud_theme.txt` | theme index |
 | `hud_font.txt` | font index |
+| `hud_fx.txt` | scanlines/glitch/CRT FX toggles |
 | `hud_log.txt` | log: port scan, NMEA, heartbeat every 60 s, battery |
 
 All of them are written to the card root, falling back to `\SDMMC\`.
