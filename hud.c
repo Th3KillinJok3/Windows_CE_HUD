@@ -2825,11 +2825,26 @@ static void draw_screen(HDC dc, int W, int H)
             }
         }
     }
-    /* subtle scanlines for retro VFD/CRT feel */
+    /* subtle scanlines for retro VFD/CRT feel - a little glitchy/jumpy */
     {
         int y;
-        for (y = 0; y < H; y += 3) {
-            fill(dc, 0, y, W, 1, RGB(0,0,0));
+        DWORD tick = GetTickCount();
+        int phase = (int)((tick / 90) % 3);      /* slow vertical jump */
+        int glitch = (int)((tick / 140) % 23);    /* occasional glitch band */
+        for (y = phase - 1; y < H; y += 3) {
+            int yy = y;
+            int x0 = 0, ww = W;
+            if (yy < 0 || yy >= H) continue;
+            /* small random-ish horizontal glitch on some bands */
+            if (((yy * 13 + glitch * 7) % 97) == 0) {
+                x0 = (int)((tick / 60 + yy) % 5) - 2;
+                ww = W - 4;
+                if (x0 < 0) x0 = 0;
+                fill(dc, 0, yy, W, 1, RGB(0,0,0));
+                if (yy + 1 < H) fill(dc, 2, yy + 1, W - 4, 1, RGB(0,0,0));
+            } else {
+                fill(dc, x0, yy, ww, 1, RGB(0,0,0));
+            }
         }
     }
 }
