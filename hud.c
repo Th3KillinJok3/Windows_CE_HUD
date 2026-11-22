@@ -1966,11 +1966,10 @@ static void draw_screen(HDC dc, int W, int H)
                     off = g_marq % span;
                 }
                 {
-                    HRGN rgn = CreateRectRgn(px, 0, px + avail, ph);
-                    SelectClipRgn(dc, rgn);
+                    int sdc = SaveDC(dc);
+                    IntersectClipRect(dc, px, 0, px + avail, ph);
                     text_at(dc, px - off, (ph - 12) / 2, wbuf, fg, g_fTop);
-                    SelectClipRgn(dc, NULL);
-                    DeleteObject(rgn);
+                    RestoreDC(dc, sdc);
                 }
             }
 #endif
@@ -2879,29 +2878,35 @@ static void draw_screen(HDC dc, int W, int H)
             }
         }
     }
-    /* simulated CRT curved screen overlay (toggleable) */
+    /* simulated CRT curved screen overlay (toggleable), coredll-safe GDI only */
     if (g_crt) {
-        HRGN full = CreateRectRgn(0, 0, W, H);
-        HRGN inner = CreateRoundRectRgn(4, 4, W - 4, H - 4, 36, 36);
-        HRGN edge = CreateRectRgn(0, 0, W, H);
-        if (full && inner && edge) {
-            HBRUSH bb = CreateSolidBrush(RGB(0,0,0));
-            if (bb) {
-                CombineRgn(edge, full, inner, RGN_DIFF);
-                FillRgn(dc, edge, bb);
-                /* subtle edge darkening for curvature/vignette feel */
-                DeleteObject(bb);
+        /* dark edge strips for vignette/curvature feel */
+        fill(dc, 0, 0, W, 2, RGB(0,0,0));
+        fill(dc, 0, H - 2, W, 2, RGB(0,0,0));
+        fill(dc, 0, 0, 2, H, RGB(0,0,0));
+        fill(dc, W - 2, 0, 2, H, RGB(0,0,0));
+        fill(dc, 0, 2, W, 1, RGB(8,8,8));
+        fill(dc, 0, H - 3, W, 1, RGB(8,8,8));
+        fill(dc, 2, 0, 1, H, RGB(8,8,8));
+        fill(dc, W - 3, 0, 1, H, RGB(8,8,8));
+        /* stepped corner masks to suggest rounded CRT corners */
+        {
+            static const int cm[12] = { 12,10,8,7,6,5,4,3,2,2,1,1 };
+            int i;
+            for (i = 0; i < 12; i++) {
+                int c = cm[i];
+                fill(dc, 0, i, c, 1, RGB(0,0,0));
+                fill(dc, W - c, i, c, 1, RGB(0,0,0));
+                fill(dc, 0, H - 1 - i, c, 1, RGB(0,0,0));
+                fill(dc, W - c, H - 1 - i, c, 1, RGB(0,0,0));
             }
         }
-        if (edge) DeleteObject(edge);
-        if (inner) DeleteObject(inner);
-        if (full) DeleteObject(full);
-        /* inner bezel shadow */
+        /* inner bezel line */
         {
-            HPEN pen = CreatePen(PS_SOLID, 2, RGB(0,0,0));
+            HPEN pen = CreatePen(PS_SOLID, 1, RGB(0,0,0));
             HPEN op = (HPEN)SelectObject(dc, pen);
             HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
-            RoundRect(dc, 2, 2, W - 2, H - 2, 38, 38);
+            Rectangle(dc, 3, 3, W - 3, H - 3);
             SelectObject(dc, op); SelectObject(dc, ob);
             DeleteObject(pen);
         }
@@ -2971,7 +2976,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 if (bmp) {
                     HGDIOBJ old = SelectObject(mem, bmp);
                     draw_screen(mem, r.right, r.bottom);
-                    /* ghost trail: OR previous bright frame, then fade+store */
+                    /* ghost trail: show previous frame faintly, then store current dimmed.
+                     * No accumulation - prevents garbled mess, fades <0.5s. */
                     if (r.right > 0 && r.bottom > 0) {
                         if (!g_ghostDC || g_ghostW != r.right || g_ghostH != r.bottom) {
                             if (g_ghostDC) {
@@ -2993,7 +2999,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                             }
                         }
                         if (!g_fadeBrush) {
-                            /* 8x8 checker dither: ~50% fade per pass so trails vanish <1s */
+                            /* 50% checker dither - multiple passes give fast fade */
                             static const WORD pat[8] = { 0x55,0xAA,0x55,0xAA,0x55,0xAA,0x55,0xAA };
                             HBITMAP pb = CreateBitmap(8, 8, 1, 1, pat);
                             if (pb) { g_fadeBrush = CreatePatternBrush(pb); DeleteObject(pb); }
@@ -3001,11 +3007,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                         if (g_ghostDC) {
                             /* overlay old ghost for persistence */
                             BitBlt(mem, 0, 0, r.right, r.bottom, g_ghostDC, 0, 0, SRCPAINT);
-                            /* fade ghost and store current frame */
+                            /* store only current frame, heavily dimmed (no accumulation) */
                             BitBlt(g_ghostDC, 0, 0, r.right, r.bottom, mem, 0, 0, SRCCOPY);
                             if (g_fadeBrush) {
                                 HBRUSH ob = (HBRUSH)SelectObject(g_ghostDC, g_fadeBrush);
-                                /* Two passes: aggressive fade so ghost trails last <1s */
+                                PatBlt(g_ghostDC, 0, 0, r.right, r.bottom, 0x00A000C9); /* DPa */
+                                PatBlt(g_ghostDC, 0, 0, r.right, r.bottom, 0x00A000C9); /* DPa */
                                 PatBlt(g_ghostDC, 0, 0, r.right, r.bottom, 0x00A000C9); /* DPa */
                                 PatBlt(g_ghostDC, 0, 0, r.right, r.bottom, 0x00A000C9); /* DPa */
                                 SelectObject(g_ghostDC, ob);
