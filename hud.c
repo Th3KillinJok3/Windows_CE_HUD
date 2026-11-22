@@ -2830,13 +2830,13 @@ static void draw_screen(HDC dc, int W, int H)
         int y;
         DWORD tick = GetTickCount();
         int phase = (int)((tick / 90) % 3);      /* slow vertical jump */
-        int glitch = (int)((tick / 140) % 23);    /* occasional glitch band */
+        int scroll = (int)((tick / 45) % 120);   /* glitch bands scroll down */
         for (y = phase - 1; y < H; y += 3) {
             int yy = y;
             int x0 = 0, ww = W;
             if (yy < 0 || yy >= H) continue;
-            /* small random-ish horizontal glitch on some bands */
-            if (((yy * 13 + glitch * 7) % 97) == 0) {
+            /* small random-ish horizontal glitch on bands scrolling down */
+            if (((yy + scroll) % 53) == 0 || ((yy + scroll * 2) % 91) == 0) {
                 x0 = (int)((tick / 60 + yy) % 5) - 2;
                 ww = W - 4;
                 if (x0 < 0) x0 = 0;
