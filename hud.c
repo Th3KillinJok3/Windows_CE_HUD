@@ -2825,6 +2825,12 @@ static void draw_screen(HDC dc, int W, int H)
             }
         }
     }
+    /* X button - top right corner, always on top for all themes */
+    {
+        int xw = X_W, xh = TOP_H;
+        fill(dc, W - xw, 0, xw, xh, TERBG);
+        text_center(dc, W - xw / 2, (xh - 14) / 2 + 1, L"X", TER, g_fBtn);
+    }
     /* subtle scanlines for retro VFD/CRT feel - a little glitchy/jumpy */
     {
         int y;
@@ -2928,8 +2934,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                             }
                         }
                         if (!g_fadeBrush) {
-                            /* 8x8 dither pattern: ~25% black pixels to fade ghost */
-                            static const WORD pat[8] = { 0xFF,0xFF,0xFB,0xFF,0xFF,0xFF,0xBF,0xFF };
+                            /* 8x8 checker dither: ~50% fade per pass so trails vanish <1s */
+                            static const WORD pat[8] = { 0x55,0xAA,0x55,0xAA,0x55,0xAA,0x55,0xAA };
                             HBITMAP pb = CreateBitmap(8, 8, 1, 1, pat);
                             if (pb) { g_fadeBrush = CreatePatternBrush(pb); DeleteObject(pb); }
                         }
@@ -2940,7 +2946,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                             BitBlt(g_ghostDC, 0, 0, r.right, r.bottom, mem, 0, 0, SRCCOPY);
                             if (g_fadeBrush) {
                                 HBRUSH ob = (HBRUSH)SelectObject(g_ghostDC, g_fadeBrush);
-                                PatBlt(g_ghostDC, 0, 0, r.right, r.bottom, 0x00A000C9); /* DPx */
+                                /* Two passes: aggressive fade so ghost trails last <1s */
+                                PatBlt(g_ghostDC, 0, 0, r.right, r.bottom, 0x00A000C9); /* DPa */
+                                PatBlt(g_ghostDC, 0, 0, r.right, r.bottom, 0x00A000C9); /* DPa */
                                 SelectObject(g_ghostDC, ob);
                             }
                         }
@@ -2987,6 +2995,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         /* MENU button - bottom right */
         if (!g_menu_open && x >= W - 58 && y >= H - BOT_H) {
             g_menu_open = 1;
+            if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
@@ -3000,6 +3009,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             /* click outside panel closes menu */
             if (x < mx || x > mx + mw || y < my || y > my + 7 * 34 + 8) {
                 g_menu_open = 0;
+                if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
                 InvalidateRect(hwnd, NULL, FALSE);
                 return 0;
             }
@@ -3027,6 +3037,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                         if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
                     } else if (i == 5) { /* Close */
                         g_menu_open = 0;
+                        if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
                     } else if (i == 6) { /* Exit */
                         g_menu_open = 0;
                         g_running = 0;
@@ -3041,6 +3052,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             }
             if (!handled) {
                 g_menu_open = 0;
+                if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
                 InvalidateRect(hwnd, NULL, FALSE);
             }
             return 0;
