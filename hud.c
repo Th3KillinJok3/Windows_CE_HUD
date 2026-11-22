@@ -2965,6 +2965,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (!g_menu_open && x >= W - 116 && x < W - 58 && y >= H - BOT_H) {
             g_theme = (g_theme + 1) % THEME_COUNT;
             theme_save();
+            if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
@@ -2994,16 +2995,21 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                     if (i == 0) { /* Theme */
                         g_theme = (g_theme + 1) % THEME_COUNT;
                         theme_save();
+                        if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
                     } else if (i == 1) { /* Font */
                         g_font_pick = (g_font_pick + 1) % FONT_COUNT;
                         font_save();
                         make_fonts();
+                        if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
                     } else if (i == 2) { /* Units */
                         g_imperial = !g_imperial;
+                        if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
                     } else if (i == 3) { /* Language */
                         g_lang = (g_lang + 1) % LANG_COUNT;
+                        if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
                     } else if (i == 4) { /* Clock 24h */
                         g_clock_24h = !g_clock_24h;
+                        if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
                     } else if (i == 5) { /* Close */
                         g_menu_open = 0;
                     } else if (i == 6) { /* Exit */
