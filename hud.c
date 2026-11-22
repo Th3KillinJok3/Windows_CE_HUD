@@ -28,6 +28,8 @@
 #define FONT_FILE_B   "\\SDMMC\\hud_font.txt"
 #define INI_FILE_A    "\\Storage Card\\hud.ini"
 #define INI_FILE_B    "\\SDMMC\\hud.ini"
+#define FX_FILE_A     "\\Storage Card\\hud_fx.txt"
+#define FX_FILE_B     "\\SDMMC\\hud_fx.txt"
 
 #define FIXED_PORT    L"COM2:"
 #define FIXED_PORT2   L"COM7:"
@@ -72,6 +74,9 @@ static const WCHAR *THEME_NAMES[THEME_COUNT] = {
 };
 static int g_theme = 0;          /* 0 = VERSO (default) */
 static int g_menu_open = 0;      /* on-screen settings menu */
+static int g_scanlines = 1;      /* retro scanline overlay */
+static int g_glitch = 1;         /* scanline glitch/jitter */
+static int g_crt = 1;            /* simulated CRT curvature */
 #define TBG     (THEMES[g_theme].bg)
 #define TPANEL  (THEMES[g_theme].panel)
 #define TLINE   (THEMES[g_theme].line)
@@ -590,6 +595,28 @@ static void theme_save(void)
     FILE *f = fopen(THEME_FILE_A, "w");
     if (!f) f = fopen(THEME_FILE_B, "w");
     if (f) { fprintf(f, "%d\n", g_theme); fclose(f); }
+}
+
+static void fx_load(void)
+{
+    FILE *f = fopen(FX_FILE_A, "r");
+    int s = 1, g = 1, c = 1;
+    if (!f) f = fopen(FX_FILE_B, "r");
+    if (f) {
+        if (fscanf(f, "%d %d %d", &s, &g, &c) == 3) {
+            g_scanlines = s ? 1 : 0;
+            g_glitch = g ? 1 : 0;
+            g_crt = c ? 1 : 0;
+        }
+        fclose(f);
+    }
+}
+
+static void fx_save(void)
+{
+    FILE *f = fopen(FX_FILE_A, "w");
+    if (!f) f = fopen(FX_FILE_B, "w");
+    if (f) { fprintf(f, "%d %d %d\n", g_scanlines, g_glitch, g_crt); fclose(f); }
 }
 
 static void odo_save(void)
@@ -2774,16 +2801,19 @@ static void draw_screen(HDC dc, int W, int H)
         int mx = W - 250;
         int my = TOP_H + 4;
         int mw = 240;
-        int mh = 7 * 34 + 8;
+        int mh = 10 * 34 + 8;
         int i;
-        const WCHAR *items[7];
+        const WCHAR *items[10];
         items[0] = L"Theme";
         items[1] = L"Font";
         items[2] = L"Units";
         items[3] = L"Language";
         items[4] = L"Clock 24h";
-        items[5] = L"Close";
-        items[6] = L"Exit";
+        items[5] = L"Scanlines";
+        items[6] = L"Glitch";
+        items[7] = L"CRT Curve";
+        items[8] = L"Close";
+        items[9] = L"Exit";
         /* panel */
         fill(dc, mx, my, mw, mh, RGB(40,14,4));
         {
@@ -2794,9 +2824,9 @@ static void draw_screen(HDC dc, int W, int H)
             SelectObject(dc, op); SelectObject(dc, ob);
             DeleteObject(pen);
         }
-        for (i = 0; i < 7; i++) {
+        for (i = 0; i < 10; i++) {
             int iy = my + 4 + i * 34;
-            fill(dc, mx + 4, iy, mw - 8, 30, (i == 6) ? RGB(78,20,4) : RGB(78,20,4));
+            fill(dc, mx + 4, iy, mw - 8, 30, RGB(78,20,4));
             {
                 HPEN pen = CreatePen(PS_SOLID, 1, RGB(255,115,0));
                 HPEN op = (HPEN)SelectObject(dc, pen);
@@ -2816,33 +2846,29 @@ static void draw_screen(HDC dc, int W, int H)
                     char c0 = LANG_CODES[g_lang][0], c1 = LANG_CODES[g_lang][1];
                     wsprintfW(val, L"%c%c", (WCHAR)c0, (WCHAR)c1);
                 }
-                else if (i == 4) wcscpy(val, g_clock_24h ? L"1" : L"0");
+                else if (i == 4) wcscpy(val, g_clock_24h ? L"ON" : L"OFF");
+                else if (i == 5) wcscpy(val, g_scanlines ? L"ON" : L"OFF");
+                else if (i == 6) wcscpy(val, g_glitch ? L"ON" : L"OFF");
+                else if (i == 7) wcscpy(val, g_crt ? L"ON" : L"OFF");
                 else wcscpy(val, L"");
-                if (i < 6) {
+                if (i < 9) {
                     int vw = text_w(dc, val, g_fBtn);
                     text_at(dc, mx + mw - 10 - vw, iy + (30 - 12) / 2, val, RGB(255,175,25), g_fBtn);
                 }
             }
         }
     }
-    /* X button - top right corner, always on top for all themes */
-    {
-        int xw = X_W, xh = TOP_H;
-        fill(dc, W - xw, 0, xw, xh, TERBG);
-        text_center(dc, W - xw / 2, (xh - 14) / 2 + 1, L"X", TER, g_fBtn);
-    }
-    /* subtle scanlines for retro VFD/CRT feel - a little glitchy/jumpy */
-    {
+    /* subtle scanlines for retro VFD/CRT feel - optional glitch/jump */
+    if (g_scanlines) {
         int y;
         DWORD tick = GetTickCount();
-        int phase = (int)((tick / 90) % 3);      /* slow vertical jump */
-        int scroll = (int)((tick / 45) % 120);   /* glitch bands scroll down */
+        int phase = g_glitch ? (int)((tick / 90) % 3) : 0;
+        int scroll = (int)((tick / 45) % 120);
         for (y = phase - 1; y < H; y += 3) {
             int yy = y;
             int x0 = 0, ww = W;
             if (yy < 0 || yy >= H) continue;
-            /* small random-ish horizontal glitch on bands scrolling down */
-            if (((yy + scroll) % 53) == 0 || ((yy + scroll * 2) % 91) == 0) {
+            if (g_glitch && (((yy + scroll) % 53) == 0 || ((yy + scroll * 2) % 91) == 0)) {
                 x0 = (int)((tick / 60 + yy) % 5) - 2;
                 ww = W - 4;
                 if (x0 < 0) x0 = 0;
@@ -2852,6 +2878,39 @@ static void draw_screen(HDC dc, int W, int H)
                 fill(dc, x0, yy, ww, 1, RGB(0,0,0));
             }
         }
+    }
+    /* simulated CRT curved screen overlay (toggleable) */
+    if (g_crt) {
+        HRGN full = CreateRectRgn(0, 0, W, H);
+        HRGN inner = CreateRoundRectRgn(4, 4, W - 4, H - 4, 36, 36);
+        HRGN edge = CreateRectRgn(0, 0, W, H);
+        if (full && inner && edge) {
+            HBRUSH bb = CreateSolidBrush(RGB(0,0,0));
+            if (bb) {
+                CombineRgn(edge, full, inner, RGN_DIFF);
+                FillRgn(dc, edge, bb);
+                /* subtle edge darkening for curvature/vignette feel */
+                DeleteObject(bb);
+            }
+        }
+        if (edge) DeleteObject(edge);
+        if (inner) DeleteObject(inner);
+        if (full) DeleteObject(full);
+        /* inner bezel shadow */
+        {
+            HPEN pen = CreatePen(PS_SOLID, 2, RGB(0,0,0));
+            HPEN op = (HPEN)SelectObject(dc, pen);
+            HBRUSH ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+            RoundRect(dc, 2, 2, W - 2, H - 2, 38, 38);
+            SelectObject(dc, op); SelectObject(dc, ob);
+            DeleteObject(pen);
+        }
+    }
+    /* X button - top right corner, always on top for all themes */
+    {
+        int xw = X_W, xh = TOP_H;
+        fill(dc, W - xw, 0, xw, xh, TERBG);
+        text_center(dc, W - xw / 2, (xh - 14) / 2 + 1, L"X", TER, g_fBtn);
     }
 }
 
@@ -3007,13 +3066,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             int i;
             int handled = 0;
             /* click outside panel closes menu */
-            if (x < mx || x > mx + mw || y < my || y > my + 7 * 34 + 8) {
+            if (x < mx || x > mx + mw || y < my || y > my + 10 * 34 + 8) {
                 g_menu_open = 0;
                 if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
                 InvalidateRect(hwnd, NULL, FALSE);
                 return 0;
             }
-            for (i = 0; i < 7; i++) {
+            for (i = 0; i < 10; i++) {
                 int iy = my + 4 + i * 34;
                 if (x >= mx + 4 && x <= mx + mw - 4 && y >= iy && y <= iy + 30) {
                     handled = 1;
@@ -3035,10 +3094,22 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                     } else if (i == 4) { /* Clock 24h */
                         g_clock_24h = !g_clock_24h;
                         if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
-                    } else if (i == 5) { /* Close */
+                    } else if (i == 5) { /* Scanlines */
+                        g_scanlines = !g_scanlines;
+                        fx_save();
+                        if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
+                    } else if (i == 6) { /* Glitch */
+                        g_glitch = !g_glitch;
+                        fx_save();
+                        if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
+                    } else if (i == 7) { /* CRT Curve */
+                        g_crt = !g_crt;
+                        fx_save();
+                        if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
+                    } else if (i == 8) { /* Close */
                         g_menu_open = 0;
                         if (g_ghostDC) PatBlt(g_ghostDC, 0, 0, g_ghostW, g_ghostH, BLACKNESS);
-                    } else if (i == 6) { /* Exit */
+                    } else if (i == 9) { /* Exit */
                         g_menu_open = 0;
                         g_running = 0;
                         odo_save();
@@ -3157,6 +3228,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR cmd, int show)
     lang_detect();
     ini_load();                 /* units= / lang= / theme= from hud.ini */
     theme_load();               /* hud_theme.txt wins over ini */
+    fx_load();
     logf_("motyw=%d units=%s lang=%s\n", g_theme,
           g_imperial ? "imperial" : "metric", LANG_CODES[g_lang]);
 
